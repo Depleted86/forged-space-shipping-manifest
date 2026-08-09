@@ -1,0 +1,146 @@
+// Planets tab - filterable planet browser + fixed harvester-slot roster
+// editor with a live rate-summary lookup. Port of gui.py's
+// _build_planets_tab and its handlers.
+
+import { el, clear } from "./dom-helpers.js";
+import { harvesterTotals } from "./calc-engine.js";
+import * as storage from "./storage.js";
+
+export function initPlanetsTab(app, container) {
+  let planetSearch = "";
+  let selectedResource = "";
+
+  // --- Planet browser ---
+  const searchInput = el("input", {
+    type: "text",
+    placeholder: "Search planet or resource...",
+    oninput: (e) => { planetSearch = e.target.value; renderPlanetTable(); },
+  });
+  const planetTbody = el("tbody");
+  const planetTable = el("table", { class: "data-table" }, [
+    el("thead", {}, [el("tr", {}, ["Planet Type", "Description", "Resources"].map((h) => el("th", { text: h })))]),
+    planetTbody,
+  ]);
+
+  function renderPlanetTable() {
+    clear(planetTbody);
+    const needle = planetSearch.trim().toLowerCase();
+    const planets = [...app.catalog.planetTypes.values()].filter((pt) => {
+      if (!needle) return true;
+      if (pt.name.toLowerCase().includes(needle)) return true;
+      return pt.resources.some((r) => r.name.toLowerCase().includes(needle));
+    });
+    for (const pt of planets) {
+      planetTbody.appendChild(
+        el("tr", {}, [
+          el("td", { text: pt.name }),
+          el("td", { text: pt.description }),
+          el("td", { text: pt.resources.map((r) => r.name).join(", ") }),
+        ])
+      );
+    }
+  }
+
+  // --- Quick rate lookup ---
+  const resourceSelect = el(
+    "select",
+    {
+      onchange: (e) => { selectedResource = e.target.value; renderHarvesterSummary(); },
+    },
+    [el("option", { value: "", text: "(choose a resource)" }), ...app.catalog.planetResourceNames().map((n) => el("option", { value: n, text: n }))]
+  );
+  const summaryLabel = el("div", { class: "summary-text" });
+
+  function renderHarvesterSummary() {
+    if (!selectedResource) {
+      summaryLabel.textContent = "Choose a resource to see current harvester coverage.";
+      return;
+    }
+    const totals = harvesterTotals(app.harvesterSlots);
+    const rate = totals[selectedResource] || 0;
+    const assignedSlots = app.harvesterSlots
+      .map((slot, i) => (slot.resource === selectedResource ? i + 1 : null))
+      .filter((n) => n !== null);
+    if (assignedSlots.length === 0) {
+      summaryLabel.textContent = "No harvesters currently assigned to this resource.";
+    } else {
+      summaryLabel.textContent = `Gathering at ${rate}/hr — harvester(s) ${assignedSlots.map((n) => "#" + n).join(", ")}`;
+    }
+  }
+
+  // --- Harvester roster ---
+  const usageLabel = el("div", { class: "status-text" });
+  const rosterBody = el("div");
+
+  function renderRoster() {
+    clear(rosterBody);
+    for (let i = 0; i < app.maxHarvesters; i++) {
+      const slot = app.harvesterSlots[i] || { resource: null, rate: 0 };
+      const resourceSel = el(
+        "select",
+        {},
+        [el("option", { value: "", text: "(idle)" }), ...app.catalog.planetResourceNames().map((n) => el("option", { value: n, text: n, selected: n === slot.resource ? "" : undefined }))]
+      );
+      resourceSel.value = slot.resource || "";
+      const rateInput = el("input", { type: "text", value: String(slot.rate ?? 0) });
+
+      const commit = () => updateSlot(i, resourceSel.value, rateInput.value);
+      resourceSel.addEventListener("change", commit);
+      rateInput.addEventListener("blur", commit);
+      rateInput.addEventListener("keydown", (e) => { if (e.key === "Enter") commit(); });
+
+      rosterBody.appendChild(
+        el("div", { class: "field-row" }, [
+          el("label", { text: `Harvester ${i + 1}:` }),
+          resourceSel,
+          el("span", { text: "Rate (units/hr):" }),
+          rateInput,
+        ])
+      );
+    }
+  }
+
+  async function updateSlot(index, resourceValue, rateValue) {
+    const resource = resourceValue || null;
+    const rate = parseFloat(rateValue);
+    if (Number.isNaN(rate)) {
+      alert("Invalid rate - enter a number.");
+      renderRoster();
+      return;
+    }
+    app.harvesterSlots[index] = { resource, rate: resource ? rate : 0 };
+    await storage.saveHarvesterSlots(app.harvesterSlots);
+    renderRoster();
+    renderUsage();
+    renderHarvesterSummary();
+  }
+
+  function renderUsage() {
+    const used = app.harvesterSlots.filter((s) => s.resource).length;
+    usageLabel.textContent = `${used} / ${app.maxHarvesters} harvester slots assigned`;
+  }
+
+  container.appendChild(
+    el("div", {}, [
+      el("div", { class: "toolbar" }, [el("label", { text: "Search:" }), searchInput]),
+      el("div", { class: "scroll-table" }, [planetTable]),
+      el("h3", { class: "section-title", text: "Quick rate lookup" }),
+      el("div", { class: "toolbar" }, [el("label", { text: "Resource:" }), resourceSelect]),
+      summaryLabel,
+      el("h3", { class: "section-title", text: `Harvesters (${app.maxHarvesters} max at a time)` }),
+      rosterBody,
+      usageLabel,
+    ])
+  );
+
+  renderPlanetTable();
+  renderHarvesterSummary();
+  renderRoster();
+  renderUsage();
+
+  app.refreshHooks.planets = () => {
+    renderRoster();
+    renderUsage();
+    renderHarvesterSummary();
+  };
+}

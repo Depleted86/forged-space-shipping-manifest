@@ -1,0 +1,34 @@
+Copyright (c) 2026 Depleted. All rights reserved.
+
+This repository is made publicly readable for transparency and independent
+review only. Forged Space Calculator interacts with the game "Forged
+Space" (developed by Coops) with Coops' explicit permission, on the
+condition that the source remain publicly viewable so that anyone
+installing it can verify what it actually does.
+
+Permission is granted to view, read, and study this source code, and to
+run it for your own personal, non-commercial use exactly as distributed.
+
+Except as stated above, all rights are reserved. You may NOT copy, modify,
+merge, publish, distribute, sublicense, or create derivative or competing
+works based on this code, in whole or in part, without prior written
+permission from the copyright holder.
+
+Bug reports, suggestions, and proposed fixes via Pull Request are welcome
+and appreciated. Submitting a Pull Request does not grant you any rights
+to this code beyond what's stated above; it is simply a proposal for the
+copyright holder to review, and all releases and published updates remain
+under the copyright holder's sole control.
+
+Forks or modified copies of this code that are installed or distributed by
+anyone other than the copyright holder are not affiliated with, endorsed
+by, or the responsibility of the copyright holder or of Coops. The
+permission described above applies specifically to this project's
+official, unmodified releases.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHOR BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.

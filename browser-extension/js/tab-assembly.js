@@ -1,0 +1,201 @@
+// Assembly tab - CRUD editor for AssemblyRecipe objects (continuous
+// production rate + per-unit input costs). Near-mirror of tab-recipes.js
+// with an added rate_per_hour field, per gui.py's _build_assembly_tab.
+
+import { el, clear } from "./dom-helpers.js";
+import { AssemblyRecipe } from "./calc-engine.js";
+import * as storage from "./storage.js";
+
+export function initAssemblyTab(app, container) {
+  let editingOutput = null; // output item name being edited, or null for new
+  let editingRequirements = {};
+
+  const listSelect = el("select", { size: "20", class: "list-select" });
+  const outputDatalistId = "assembly-output-datalist";
+  const outputDatalist = el("datalist", { id: outputDatalistId });
+  const outputInput = el("input", { type: "text", list: outputDatalistId, placeholder: "Output item (Commodity name)" });
+  const rateInput = el("input", { type: "text", value: "1", style: "width:90px" });
+
+  const inputDatalistId = "assembly-input-datalist";
+  const inputDatalist = el("datalist", { id: inputDatalistId }, app.catalog.allItemNames().map((n) => el("option", { value: n })));
+  const inputItemInput = el("input", { type: "text", list: inputDatalistId, placeholder: "Input item" });
+  const inputQtyInput = el("input", { type: "text", value: "1", style: "width:70px" });
+
+  const reqTbody = el("tbody");
+  const reqTable = el("table", { class: "data-table" }, [
+    el("thead", {}, [el("tr", {}, ["Input Item", "Kind", "Qty per unit"].map((h) => el("th", { text: h })))]),
+    reqTbody,
+  ]);
+
+  function refreshOutputChoices() {
+    clear(outputDatalist);
+    const names = new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyRecipes)]);
+    for (const n of [...names].sort()) outputDatalist.appendChild(el("option", { value: n }));
+  }
+
+  function savedFor(name) {
+    return name && app.assemblyRecipes[name] ? { rate: app.assemblyRecipes[name].ratePerHour, req: app.assemblyRecipes[name].requirements } : { rate: null, req: {} };
+  }
+
+  function hasUnsavedChanges() {
+    const saved = savedFor(editingOutput);
+    const nameChanged = editingOutput !== null && outputInput.value.trim() !== editingOutput;
+    const rateChanged = saved.rate !== null && parseFloat(rateInput.value) !== saved.rate;
+    return nameChanged || rateChanged || JSON.stringify(saved.req) !== JSON.stringify(editingRequirements);
+  }
+
+  function confirmDiscard() {
+    if (!hasUnsavedChanges()) return true;
+    return confirm("Discard unsaved changes to this Assembly recipe?");
+  }
+
+  function refreshListbox() {
+    clear(listSelect);
+    for (const name of Object.keys(app.assemblyRecipes).sort()) {
+      listSelect.appendChild(el("option", { value: name, text: name, selected: name === editingOutput ? "" : undefined }));
+    }
+    listSelect.value = editingOutput || "";
+  }
+
+  function refreshTree() {
+    clear(reqTbody);
+    for (const name of Object.keys(editingRequirements).sort()) {
+      const row = el("tr", { "data-item": name }, [
+        el("td", { text: name }),
+        el("td", { text: app.kindLabel(name) }),
+        el("td", { text: String(editingRequirements[name]) }),
+      ]);
+      row.addEventListener("click", () => {
+        inputItemInput.value = name;
+        inputQtyInput.value = String(editingRequirements[name]);
+      });
+      reqTbody.appendChild(row);
+    }
+  }
+
+  function clearEditor() {
+    editingOutput = null;
+    editingRequirements = {};
+    outputInput.value = "";
+    rateInput.value = "1";
+    inputItemInput.value = "";
+    inputQtyInput.value = "1";
+    refreshTree();
+    refreshListbox();
+  }
+
+  function newRecipe() {
+    if (!confirmDiscard()) return;
+    clearEditor();
+  }
+
+  async function deleteRecipe() {
+    if (!editingOutput) return;
+    if (!confirm(`Delete Assembly recipe for "${editingOutput}"?`)) return;
+    delete app.assemblyRecipes[editingOutput];
+    await storage.saveAssemblyRecipes(app.assemblyRecipes);
+    clearEditor();
+    refreshOutputChoices();
+  }
+
+  function loadIntoEditor(name) {
+    if (name === editingOutput) return;
+    if (!confirmDiscard()) {
+      listSelect.value = editingOutput || "";
+      return;
+    }
+    editingOutput = name;
+    const recipe = app.assemblyRecipes[name];
+    editingRequirements = { ...(recipe?.requirements || {}) };
+    outputInput.value = name;
+    rateInput.value = String(recipe?.ratePerHour ?? 1);
+    refreshTree();
+    refreshListbox();
+  }
+
+  function addInput() {
+    const name = inputItemInput.value.trim();
+    const qty = parseFloat(inputQtyInput.value);
+    if (!name || Number.isNaN(qty)) {
+      alert("Enter an item name and a numeric quantity.");
+      return;
+    }
+    if (app.kindLabel(name) === "Commodity") {
+      alert(`"${name}" isn't a known ore, refined material, or planetary resource - it will be tracked as a Commodity, unless it also has its own Assembly recipe.`);
+    }
+    editingRequirements[name] = qty;
+    refreshTree();
+  }
+
+  function removeSelected() {
+    const row = reqTbody.querySelector("tr.selected");
+    if (!row) return;
+    delete editingRequirements[row.dataset.item];
+    refreshTree();
+  }
+
+  async function saveEditor() {
+    const outputItem = outputInput.value.trim();
+    const rate = parseFloat(rateInput.value);
+    if (!outputItem) {
+      alert("Enter an output item name.");
+      return;
+    }
+    if (!(rate > 0)) {
+      alert("Rate (units/hour) must be a positive number.");
+      return;
+    }
+    if (Object.keys(editingRequirements).length === 0) {
+      alert("Add at least one input requirement.");
+      return;
+    }
+    const recipe = new AssemblyRecipe(outputItem, rate);
+    for (const [itemName, qty] of Object.entries(editingRequirements)) recipe.setRequirement(itemName, qty);
+    if (editingOutput && editingOutput !== outputItem) delete app.assemblyRecipes[editingOutput];
+    app.assemblyRecipes[outputItem] = recipe;
+    await storage.saveAssemblyRecipes(app.assemblyRecipes);
+    editingOutput = outputItem;
+    refreshListbox();
+    refreshOutputChoices();
+    alert(`Saved Assembly recipe for "${outputItem}".`);
+  }
+
+  listSelect.addEventListener("change", () => loadIntoEditor(listSelect.value));
+  reqTbody.addEventListener("click", (e) => {
+    const row = e.target.closest("tr");
+    if (!row) return;
+    for (const r of reqTbody.querySelectorAll("tr")) r.classList.remove("selected");
+    row.classList.add("selected");
+  });
+
+  container.appendChild(
+    el("div", { class: "split-layout" }, [
+      el("div", { class: "side-list" }, [
+        listSelect,
+        el("div", { class: "toolbar" }, [
+          el("button", { text: "New", onclick: newRecipe }),
+          el("button", { class: "danger", text: "Delete", onclick: deleteRecipe }),
+        ]),
+      ]),
+      el("div", { class: "detail-panel" }, [
+        el("div", { class: "hint", text: "Assembly produces a Commodity at a continuous rate (units/hour), each unit costing the listed inputs." }),
+        el("div", { class: "field-row" }, [el("label", { text: "Output item:" }), outputInput]),
+        outputDatalist,
+        el("div", { class: "field-row" }, [el("label", { text: "Rate (units/hour):" }), rateInput]),
+        el("div", { class: "toolbar" }, [inputItemInput, inputQtyInput, el("button", { text: "Add / Update", onclick: addInput })]),
+        inputDatalist,
+        el("div", { class: "scroll-table" }, [reqTable]),
+        el("div", { class: "toolbar" }, [
+          el("button", { text: "Remove Selected Input", onclick: removeSelected }),
+          el("button", { text: "Save Assembly Recipe", onclick: saveEditor }),
+        ]),
+      ]),
+    ])
+  );
+
+  refreshOutputChoices();
+  refreshListbox();
+  refreshTree();
+
+  app.refreshHooks.assembly = () => refreshOutputChoices();
+}

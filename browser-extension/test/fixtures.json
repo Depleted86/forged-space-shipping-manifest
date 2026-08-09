@@ -1,0 +1,416 @@
+{
+  "scenario_a_empty_inventory_consolidation": {
+    "assembly_hours": {},
+    "cargo_capacity": 600,
+    "expected": {
+      "assembly_hours": {},
+      "harvest_hours": {
+        "Cinderstone": 2.5
+      },
+      "harvest_rate": {
+        "Cinderstone": 12.0
+      },
+      "item_kind": {
+        "Cinderstone": "planet_resource",
+        "Iron Ore": "material",
+        "Jasper Ore": "material",
+        "Mystery Widget": "unknown",
+        "Thracium": "ore"
+      },
+      "item_need": {
+        "Cinderstone": 30,
+        "Iron Ore": 100.0,
+        "Jasper Ore": 40.0,
+        "Mystery Widget": 10,
+        "Thracium": 50
+      },
+      "material_ore_choice": {
+        "Iron Ore": "Thracium",
+        "Jasper Ore": "Thracium"
+      },
+      "ore_direct_raw": {
+        "Thracium": 50.0
+      },
+      "ore_raw_needed": {
+        "Thracium": 550.0
+      },
+      "ore_target_refined": {
+        "Thracium": 100.0
+      },
+      "ore_to_mine": {
+        "Thracium": 550.0
+      },
+      "pending_batches": {},
+      "pending_credit": {
+        "Iron Ore": 0.0,
+        "Jasper Ore": 0.0
+      },
+      "planet_hint": {
+        "Cinderstone": [
+          "Desert Planet"
+        ]
+      },
+      "total_raw_to_mine": 550.0,
+      "trips": 1,
+      "unresolved": {
+        "Mystery Widget": 10
+      }
+    },
+    "harvester_rates": {
+      "Cinderstone": 12.0
+    },
+    "ore_choices": {
+      "Iron Ore": "Thracium",
+      "Jasper Ore": "Thracium"
+    },
+    "pending_batches": {},
+    "requirements": {
+      "Cinderstone": 30,
+      "Iron Ore": 100,
+      "Jasper Ore": 40,
+      "Mystery Widget": 10,
+      "Thracium": 50
+    }
+  },
+  "scenario_b_partial_inventory_pending_credit": {
+    "assembly_hours": {},
+    "cargo_capacity": 600,
+    "expected": {
+      "assembly_hours": {},
+      "harvest_hours": {
+        "Cinderstone": 3.0
+      },
+      "harvest_rate": {
+        "Cinderstone": 5.0
+      },
+      "item_kind": {
+        "Cinderstone": "planet_resource",
+        "Iron Ore": "material",
+        "Refined Ore": "material"
+      },
+      "item_need": {
+        "Cinderstone": 15.0,
+        "Iron Ore": 0.0,
+        "Refined Ore": 0.0
+      },
+      "material_ore_choice": {},
+      "ore_direct_raw": {},
+      "ore_raw_needed": {
+        "Thracium": 0.0
+      },
+      "ore_target_refined": {},
+      "ore_to_mine": {
+        "Thracium": 0.0
+      },
+      "pending_batches": {
+        "Thracium": 2
+      },
+      "pending_credit": {
+        "Iron Ore": 120.0,
+        "Refined Ore": 120.0
+      },
+      "planet_hint": {
+        "Cinderstone": [
+          "Desert Planet"
+        ]
+      },
+      "total_raw_to_mine": 0.0,
+      "trips": 0,
+      "unresolved": {}
+    },
+    "expected_pending_bonus": {
+      "Iron Ore": 120.0,
+      "Jasper Ore": 120.0,
+      "Refined Ore": 120.0
+    },
+    "harvester_rates": {
+      "Cinderstone": 5.0
+    },
+    "inventory": {
+      "other": {
+        "Cinderstone": 5.0
+      },
+      "raw_ore": {
+        "Thracium": 80.0
+      },
+      "refined": {
+        "Iron Ore": 15.0
+      }
+    },
+    "ore_choices": {
+      "Iron Ore": "Thracium",
+      "Refined Ore": "Thracium"
+    },
+    "pending_batches": {
+      "Thracium": 2
+    },
+    "requirements": {
+      "Cinderstone": 20,
+      "Iron Ore": 100,
+      "Refined Ore": 30
+    }
+  },
+  "scenario_c_consolidation_opportunities": {
+    "current_ore_choices": {
+      "Copper Ore": "Kelsalt",
+      "Iron Ore": "Feltonite",
+      "Jasper Ore": "Abaron"
+    },
+    "expected": [
+      {
+        "builds": [
+          "1",
+          "2"
+        ],
+        "covered": [
+          "Iron Ore",
+          "Jasper Ore"
+        ],
+        "ore": "Thracium"
+      },
+      {
+        "builds": [
+          "1",
+          "2"
+        ],
+        "covered": [
+          "Iron Ore",
+          "Jasper Ore"
+        ],
+        "ore": "Feltonite"
+      },
+      {
+        "builds": [
+          "1",
+          "2"
+        ],
+        "covered": [
+          "Copper Ore",
+          "Iron Ore"
+        ],
+        "ore": "Kelsalt"
+      },
+      {
+        "builds": [
+          "1",
+          "2"
+        ],
+        "covered": [
+          "Copper Ore",
+          "Jasper Ore"
+        ],
+        "ore": "Abaron"
+      },
+      {
+        "builds": [
+          "1",
+          "2"
+        ],
+        "covered": [
+          "Copper Ore",
+          "Jasper Ore"
+        ],
+        "ore": "Hikarite"
+      }
+    ],
+    "needed_materials": {
+      "Copper Ore": [
+        "1",
+        "2"
+      ],
+      "Iron Ore": [
+        "1"
+      ],
+      "Jasper Ore": [
+        "2"
+      ]
+    }
+  },
+  "scenario_d_assembly_cascade": {
+    "assembly_recipes": {
+      "Gadget": {
+        "rate_per_hour": 10.0,
+        "requirements": {
+          "Copper Ore": 4.0
+        }
+      },
+      "Widget": {
+        "rate_per_hour": 5.0,
+        "requirements": {
+          "Gadget": 2.0,
+          "Iron Ore": 3.0
+        }
+      }
+    },
+    "cargo_capacity": 600,
+    "expected_assembly_hours": {
+      "Gadget": 2.0,
+      "Widget": 2.0
+    },
+    "expected_expanded": {
+      "Copper Ore": 80.0,
+      "Gadget": 20.0,
+      "Iron Ore": 30.0,
+      "Widget": 10
+    },
+    "expected_plan": {
+      "assembly_hours": {
+        "Gadget": 2.0,
+        "Widget": 2.0
+      },
+      "harvest_hours": {},
+      "harvest_rate": {},
+      "item_kind": {
+        "Copper Ore": "material",
+        "Gadget": "unknown",
+        "Iron Ore": "material",
+        "Widget": "unknown"
+      },
+      "item_need": {
+        "Copper Ore": 80.0,
+        "Gadget": 20.0,
+        "Iron Ore": 30.0,
+        "Widget": 10
+      },
+      "material_ore_choice": {
+        "Copper Ore": "Kelsalt",
+        "Iron Ore": "Thracium"
+      },
+      "ore_direct_raw": {},
+      "ore_raw_needed": {
+        "Kelsalt": 400.0,
+        "Thracium": 150.0
+      },
+      "ore_target_refined": {
+        "Kelsalt": 80.0,
+        "Thracium": 30.0
+      },
+      "ore_to_mine": {
+        "Kelsalt": 400.0,
+        "Thracium": 150.0
+      },
+      "pending_batches": {},
+      "pending_credit": {
+        "Copper Ore": 0.0,
+        "Iron Ore": 0.0
+      },
+      "planet_hint": {},
+      "total_raw_to_mine": 550.0,
+      "trips": 1,
+      "unresolved": {}
+    },
+    "inventory_other": {},
+    "ore_choices": {
+      "Copper Ore": "Kelsalt",
+      "Iron Ore": "Thracium"
+    },
+    "requirements": {
+      "Widget": 10
+    }
+  },
+  "scenario_e_zero_cargo_capacity": {
+    "cargo_capacity": 0,
+    "expected": {
+      "assembly_hours": {},
+      "harvest_hours": {},
+      "harvest_rate": {},
+      "item_kind": {
+        "Iron Ore": "material"
+      },
+      "item_need": {
+        "Iron Ore": 50.0
+      },
+      "material_ore_choice": {
+        "Iron Ore": "Thracium"
+      },
+      "ore_direct_raw": {},
+      "ore_raw_needed": {
+        "Thracium": 250.0
+      },
+      "ore_target_refined": {
+        "Thracium": 50.0
+      },
+      "ore_to_mine": {
+        "Thracium": 250.0
+      },
+      "pending_batches": {},
+      "pending_credit": {
+        "Iron Ore": 0.0
+      },
+      "planet_hint": {},
+      "total_raw_to_mine": 250.0,
+      "trips": 0,
+      "unresolved": {}
+    },
+    "ore_choices": {
+      "Iron Ore": "Thracium"
+    },
+    "requirements": {
+      "Iron Ore": 50
+    }
+  },
+  "scenario_f_fallback_to_first_source": {
+    "cargo_capacity": 600,
+    "expected": {
+      "assembly_hours": {},
+      "harvest_hours": {},
+      "harvest_rate": {},
+      "item_kind": {
+        "Iron Ore": "material"
+      },
+      "item_need": {
+        "Iron Ore": 20.0
+      },
+      "material_ore_choice": {
+        "Iron Ore": "Thracium"
+      },
+      "ore_direct_raw": {},
+      "ore_raw_needed": {
+        "Thracium": 100.0
+      },
+      "ore_target_refined": {
+        "Thracium": 20.0
+      },
+      "ore_to_mine": {
+        "Thracium": 100.0
+      },
+      "pending_batches": {},
+      "pending_credit": {
+        "Iron Ore": 0.0
+      },
+      "planet_hint": {},
+      "total_raw_to_mine": 100.0,
+      "trips": 1,
+      "unresolved": {}
+    },
+    "expected_fallback_ore": "Thracium",
+    "ore_choices": {},
+    "requirements": {
+      "Iron Ore": 20
+    }
+  },
+  "scenario_g_harvester_totals": {
+    "expected": {
+      "Auric Gas": 3.5,
+      "Cinderstone": 12.0
+    },
+    "slots": [
+      {
+        "rate": 5.0,
+        "resource": "Cinderstone"
+      },
+      {
+        "rate": 0,
+        "resource": null
+      },
+      {
+        "rate": 7.0,
+        "resource": "Cinderstone"
+      },
+      {
+        "rate": 3.5,
+        "resource": "Auric Gas"
+      }
+    ]
+  }
+}

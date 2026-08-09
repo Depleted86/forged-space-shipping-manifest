@@ -1,0 +1,3 @@
+# Packaged build artifact - built from source, not itself source
+*.xpi
+*.zip

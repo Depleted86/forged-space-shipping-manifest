@@ -1,0 +1,95 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f172a;
+  --bg-panel: #1e293b;
+  --bg-panel-alt: #172033;
+  --border: #334155;
+  --text: #e2e8f0;
+  --text-dim: #94a3b8;
+  --cyan: #67e8f9;
+  --cyan-dim: #22d3ee;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 13px;
+}
+
+.popup-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-panel);
+}
+
+.popup-header h1 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--cyan);
+}
+
+.popup-header button {
+  background: var(--bg-panel-alt);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.popup-header button:hover {
+  color: var(--text);
+  border-color: var(--cyan-dim);
+}
+
+.ore-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px;
+}
+
+.ore-row {
+  padding: 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(148, 163, 184, 0.15);
+  margin-bottom: 6px;
+  /* No wrapping so the window can be sized to the widest row's true
+     content width (see resizeToFit() in popup.js); truncates with an
+     ellipsis (full text still available via the row's title tooltip) only
+     if that width ends up clamped below MAX_CONTENT_WIDTH. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ore-row:nth-child(odd) {
+  background: rgba(251, 146, 60, 0.12);
+}
+
+.ore-row:nth-child(even) {
+  background: rgba(34, 211, 238, 0.12);
+}
+
+.ore-row:last-child {
+  margin-bottom: 0;
+}
+
+.empty-message {
+  padding: 10px 4px;
+  color: var(--text-dim);
+}

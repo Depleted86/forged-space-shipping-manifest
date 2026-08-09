@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Forged Space Calculator</title>
+  <link rel="stylesheet" href="dashboard.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header-top">
+      <h1>Forged Space Calculator</h1>
+      <button id="to-mine-switch" class="header-btn" style="display:none" title="Switch this window back to the To Mine list">← To Mine</button>
+    </div>
+    <nav class="tab-nav" id="tab-nav">
+      <button class="tab-btn" data-tab="ore-database">Ore Database</button>
+      <button class="tab-btn" data-tab="planets">Planets</button>
+      <button class="tab-btn" data-tab="inventory">Inventory</button>
+      <button class="tab-btn" data-tab="recipes">Recipes</button>
+      <button class="tab-btn" data-tab="assembly">Assembly</button>
+      <button class="tab-btn" data-tab="plan">Plan a Build</button>
+      <button class="tab-btn" data-tab="settings">Settings</button>
+      <button class="tab-btn" data-tab="about">About</button>
+    </nav>
+  </header>
+
+  <main id="tab-panels">
+    <section id="tab-ore-database" class="tab-panel"></section>
+    <section id="tab-planets" class="tab-panel"></section>
+    <section id="tab-inventory" class="tab-panel"></section>
+    <section id="tab-recipes" class="tab-panel"></section>
+    <section id="tab-assembly" class="tab-panel"></section>
+    <section id="tab-plan" class="tab-panel"></section>
+    <section id="tab-settings" class="tab-panel"></section>
+    <section id="tab-about" class="tab-panel"></section>
+  </main>
+
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>
