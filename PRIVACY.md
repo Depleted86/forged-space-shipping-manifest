@@ -64,10 +64,10 @@ extension's code.
 
 This extension's full source code is public specifically so that
 everything above can be independently verified rather than taken on
-faith: https://github.com/Depleted86/forged-space-calculator
+faith: https://github.com/Depleted86/forged-space-shipping-manifest
 
 ## Contact
 
 Questions or concerns can be raised via
-[GitHub Issues](https://github.com/Depleted86/forged-space-calculator/issues)
+[GitHub Issues](https://github.com/Depleted86/forged-space-shipping-manifest/issues)
 on the project repository.

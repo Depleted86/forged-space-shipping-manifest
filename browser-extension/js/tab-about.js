@@ -30,7 +30,7 @@ export function initAboutTab(app, container) {
       }),
       el("p", {}, [
         "The source code is public on ",
-        el("a", { href: "https://github.com/Depleted86/forged-space-calculator", target: "_blank", rel: "noopener noreferrer", text: "GitHub" }),
+        el("a", { href: "https://github.com/Depleted86/forged-space-shipping-manifest", target: "_blank", rel: "noopener noreferrer", text: "GitHub" }),
         " so you (or anyone) can verify all of the above for yourself, rather than just taking our word for it.",
       ]),
       el("p", {
