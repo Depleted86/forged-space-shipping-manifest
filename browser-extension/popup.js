@@ -113,7 +113,37 @@ browser.storage.local.get("toMineData").then((result) => {
 });
 
 document.getElementById("switch-to-dashboard").addEventListener("click", async () => {
-  const win = await browser.windows.getCurrent();
-  await browser.windows.update(win.id, { width: DASHBOARD_WIDTH, height: DASHBOARD_HEIGHT });
+  // windows.update() only resizes - it doesn't reposition. If this compact
+  // window is sitting near a screen edge (e.g. parked on the right while
+  // mining), growing it from the top-left corner without also moving it
+  // pushes the far edge off-screen, since left/top stay fixed.
+  //
+  // Two earlier attempts to fix this by computing exact screen/monitor
+  // bounds both failed in practice on a two-monitor setup: window.screen's
+  // availLeft/availTop didn't reliably reflect the correct monitor, and
+  // browser.system.display (which needs its own manifest permission) isn't
+  // actually implemented in Firefox at all - calling it threw, and with no
+  // error handling that silently killed the whole click handler before it
+  // ever navigated ("the button does nothing"). Rather than lean on a THIRD
+  // possibly-unreliable API, this just grows the window symmetrically
+  // around its OWN current center point - using only browser.windows data,
+  // no screen/display API or extra permission needed at all. It won't
+  // perfectly guarantee on-screen placement in every case, but it's a much
+  // smaller, safer expansion than anchoring at the top-left corner, and it
+  // can't fail the way the display-lookup approaches did.
+  //
+  // Wrapped in try/catch so that if resizing/repositioning fails for any
+  // reason, navigation to the dashboard still happens regardless - a
+  // cosmetic positioning miss should never block the actual button action.
+  try {
+    const win = await browser.windows.getCurrent();
+    const centerX = win.left + win.width / 2;
+    const centerY = win.top + win.height / 2;
+    const left = Math.round(centerX - DASHBOARD_WIDTH / 2);
+    const top = Math.round(centerY - DASHBOARD_HEIGHT / 2);
+    await browser.windows.update(win.id, { width: DASHBOARD_WIDTH, height: DASHBOARD_HEIGHT, left, top });
+  } catch (err) {
+    console.warn("Couldn't resize/reposition before switching to dashboard:", err);
+  }
   window.location.href = "dashboard.html";
 });

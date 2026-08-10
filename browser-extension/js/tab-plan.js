@@ -8,33 +8,18 @@
 // to the `toMineData` storage key - this replaces both
 // app.last_plan_result (Python, in-memory only) and bridge_server.py's GET
 // handler, since the toolbar popup (popup.js) now reads that key directly.
+//
+// entriesToTotals() and toStorableToMineData() used to be defined here but
+// moved to calc-engine.js (2026-08-09) so background.js can import them for
+// headless recalculation - see recalculateActiveBuildToMineData() there.
 
-import { el, clear } from "./dom-helpers.js";
-import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput } from "./calc-engine.js";
+import { el, clear, selectableRow } from "./dom-helpers.js";
+import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData } from "./calc-engine.js";
 import * as storage from "./storage.js";
 import { applyLocalPendingDeduction } from "./tab-inventory.js";
 
 function formatHours(hours) {
   return `${hours.toFixed(1)}h (${(hours / 24).toFixed(1)} days)`;
-}
-
-// Scales a Recipe's per-unit requirements by qty, or adds a flat ad-hoc
-// material qty directly. Shared by single-build and all-builds paths, port
-// of gui.py's _entries_to_totals.
-export function entriesToTotals(app, entries) {
-  const totals = {};
-  for (const [kind, name, qty] of entries) {
-    if (kind === "recipe") {
-      const recipe = app.recipes[name];
-      if (!recipe) continue;
-      for (const [item, itemQty] of Object.entries(recipe.scaled(qty))) {
-        totals[item] = (totals[item] || 0) + itemQty;
-      }
-    } else {
-      totals[name] = (totals[name] || 0) + qty;
-    }
-  }
-  return totals;
 }
 
 // list of [oreName, batches] for every pending-refining ore whose outputs
@@ -49,37 +34,20 @@ export function pendingCreditContributors(app, materialName) {
   return out;
 }
 
-// PlanResult (Ore/Material Map keys) -> the plain JSON shape popup.js's
-// To-Mine list expects, matching bridge_server.py's build_payload exactly.
-export function toStorableToMineData(result, cargoCapacity) {
-  if (!result) return { available: false, ores: [] };
-  const ores = [];
-  for (const [ore, toMine] of result.oreToMine.entries()) {
-    if (toMine <= 0) continue;
-    const trips = cargoCapacity > 0 ? Math.ceil(toMine / cargoCapacity) : 0;
-    ores.push({ name: ore.name, law: ore.law, to_mine: Math.round(toMine * 10) / 10, trips, value_cr: Math.round(toMine * ore.value) });
-  }
-  ores.sort((a, b) => b.to_mine - a.to_mine);
-  return {
-    available: true,
-    cargo_capacity: cargoCapacity,
-    total_raw_to_mine: Math.round(result.totalRawToMine * 10) / 10,
-    trips: result.trips,
-    ores,
-  };
-}
-
 export function initPlanTab(app, container) {
   let planEntries = []; // [[kind, name, qty], ...] - scratch list, tied to active build
   let planSourceSelects = {}; // itemName -> <select> element (material source choice)
 
   // ============================ Build selector ============================
-  const buildSelect = el("select", {}, [el("option", { value: "", text: "(unsaved plan)" })]);
+  // There's deliberately no "(unsaved plan)" option anymore - Build 1 is
+  // always the fallback (see ensureBuildOneAndLoad() below), so the
+  // dropdown only ever lists real, saved builds.
+  const buildSelectLabel = el("label", { for: "plan-build-select", class: "visually-hidden", text: "Active build" });
+  const buildSelect = el("select", { id: "plan-build-select" });
   const buildStatus = el("div", { class: "status-text" });
 
   function refreshBuildCombo() {
     clear(buildSelect);
-    buildSelect.appendChild(el("option", { value: "", text: "(unsaved plan)" }));
     for (const name of Object.keys(app.builds).sort((a, b) => Number(a) - Number(b))) {
       buildSelect.appendChild(el("option", { value: name, text: `Build ${name}`, selected: name === app.activeBuildName ? "" : undefined }));
     }
@@ -112,10 +80,10 @@ export function initPlanTab(app, container) {
     if (!confirm(`Delete build "${app.activeBuildName}"? This does not touch pending refining or inventory.`)) return;
     delete app.builds[app.activeBuildName];
     await storage.saveBuilds(app.builds);
-    app.activeBuildName = null;
-    refreshBuildCombo();
-    buildStatus.textContent = "No build selected - changes here won't be saved for later.";
-    await clearPlan();
+    // Falls back to Build 1 (recreated fresh if it was the one just
+    // deleted) rather than landing in the old "(unsaved plan)" state -
+    // there's always a build selected now, never a generic placeholder.
+    await ensureBuildOneAndLoad();
   }
 
   async function markBuildComplete() {
@@ -144,15 +112,14 @@ export function initPlanTab(app, container) {
 
     delete app.builds[app.activeBuildName];
     await storage.saveBuilds(app.builds);
-    app.activeBuildName = null;
-    refreshBuildCombo();
-    buildStatus.textContent = "No build selected - changes here won't be saved for later.";
-    await clearPlan();
+    // Same fallback as deleteBuild() - see the comment there.
+    await ensureBuildOneAndLoad();
   }
 
   async function loadBuild(name) {
     if (!name || !app.builds[name]) return;
     app.activeBuildName = name;
+    await storage.saveActiveBuildName(name);
     planEntries = app.builds[name].map((e) => [...e]);
     buildSelect.value = name;
     buildStatus.textContent = `Editing build "${name}" - changes save automatically.`;
@@ -163,7 +130,29 @@ export function initPlanTab(app, container) {
     missingAssemblyWarning.textContent = "";
     app.lastPlanResult = null;
     await buildRequirements();
-    if (Object.keys(app.planBaseRequirements).length > 0) await calculatePlan();
+    if (Object.keys(app.planBaseRequirements).length > 0) {
+      await calculatePlan();
+    } else {
+      // Otherwise a build with nothing in it yet (e.g. freshly created)
+      // would silently leave whichever OTHER build's numbers were last
+      // calculated sitting in toMineData, making the floating "To Mine"
+      // window show a plan that has nothing to do with the build now
+      // actually selected.
+      await storage.saveToMineData({ available: false });
+    }
+  }
+
+  // Ensures "Build 1" exists (creating it fresh if this is the very first
+  // use, or if it was deleted/completed) and loads it - the fallback home
+  // base now that there's no more generic "(unsaved plan)" state to fall
+  // back to.
+  async function ensureBuildOneAndLoad() {
+    if (!app.builds["1"]) {
+      app.builds["1"] = [];
+      await storage.saveBuilds(app.builds);
+    }
+    refreshBuildCombo();
+    await loadBuild("1");
   }
 
   buildSelect.addEventListener("change", () => {
@@ -180,8 +169,10 @@ export function initPlanTab(app, container) {
   }
 
   // ============================ Add-to-plan controls ============================
-  const recipeSelect = el("select", {});
-  const recipeQtyInput = el("input", { type: "text", value: "1", style: "width:70px" });
+  const recipeSelectLabel = el("label", { for: "plan-recipe-select", class: "visually-hidden", text: "Recipe to add" });
+  const recipeSelect = el("select", { id: "plan-recipe-select" });
+  const recipeQtyLabel = el("label", { for: "plan-recipe-qty", class: "visually-hidden", text: "Recipe quantity" });
+  const recipeQtyInput = el("input", { id: "plan-recipe-qty", type: "text", value: "1", style: "width:70px" });
   function refreshPlanRecipeCombo() {
     clear(recipeSelect);
     for (const name of Object.keys(app.recipes).sort()) recipeSelect.appendChild(el("option", { value: name, text: name }));
@@ -201,8 +192,10 @@ export function initPlanTab(app, container) {
 
   const itemDatalistId = "plan-item-datalist";
   const itemDatalist = el("datalist", { id: itemDatalistId }, app.catalog.allItemNames().map((n) => el("option", { value: n })));
-  const materialInput = el("input", { type: "text", list: itemDatalistId, placeholder: "Item name" });
-  const materialQtyInput = el("input", { type: "text", value: "0", style: "width:70px" });
+  const materialLabel = el("label", { for: "plan-material-input", class: "visually-hidden", text: "Item name" });
+  const materialInput = el("input", { id: "plan-material-input", type: "text", list: itemDatalistId, placeholder: "Item name" });
+  const materialQtyLabel = el("label", { for: "plan-material-qty", class: "visually-hidden", text: "Item quantity" });
+  const materialQtyInput = el("input", { id: "plan-material-qty", type: "text", value: "0", style: "width:70px" });
 
   async function addMaterialToPlan() {
     const name = materialInput.value.trim();
@@ -217,7 +210,8 @@ export function initPlanTab(app, container) {
   }
 
   // ============================ Plan items list ============================
-  const entriesSelect = el("select", { size: "6", class: "list-select" });
+  const entriesSelectLabel = el("label", { for: "plan-entries-select", class: "visually-hidden", text: "Plan items" });
+  const entriesSelect = el("select", { id: "plan-entries-select", size: "6", class: "list-select" });
   function renderEntriesList() {
     clear(entriesSelect);
     planEntries.forEach(([kind, name, qty], i) => {
@@ -256,10 +250,14 @@ export function initPlanTab(app, container) {
   }
 
   // ============================ Item sources ============================
-  const sourcesContainer = el("div");
+  // "sources-container" makes this a wrapping flex row instead of a plain
+  // vertical stack - see dashboard.css. Scoped to this specific container
+  // (not the shared .field-row class itself, which many other single-row
+  // usages across the dashboard rely on staying full-width/stacked).
+  const sourcesContainer = el("div", { class: "sources-container" });
 
   async function buildRequirements() {
-    const totals = entriesToTotals(app, planEntries);
+    const totals = entriesToTotals(app.recipes, planEntries);
     app.planBaseRequirements = totals;
     const { expanded, assemblyHours } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory);
     app.planRequirements = expanded;
@@ -270,6 +268,7 @@ export function initPlanTab(app, container) {
     const pendingBonus = pendingRefiningOutput(app.catalog, app.pendingRefining);
     const names = Object.keys(expanded).sort();
     let anyShown = false;
+    let sourceRowIndex = 0;
     for (const name of names) {
       const [kind, obj] = app.catalog.classify(name);
       const have = kind === "material" ? app.inventory.refinedQty(obj) : kind === "ore" ? app.inventory.rawQty(obj) : app.inventory.other[name] || 0;
@@ -280,16 +279,17 @@ export function initPlanTab(app, container) {
 
       let row;
       if (kind === "material") {
+        const selectId = `plan-source-${sourceRowIndex++}`;
         const select = el(
           "select",
-          {},
+          { id: selectId },
           obj.sources.map((o) => el("option", { value: o.name, text: o.name }))
         );
         const savedChoice = app.settings.ore_choices?.[name];
         select.value = obj.sources.some((o) => o.name === savedChoice) ? savedChoice : obj.sources[0]?.name || "";
         planSourceSelects[name] = select;
         row = el("div", { class: "field-row" }, [
-          el("label", { text: `${name} (refined, need ${need.toFixed(1)}${pendingCredit > 0 ? `, +${pendingCredit} pending` : ""}):` }),
+          el("label", { for: selectId, text: `${name} (refined, need ${need.toFixed(1)}${pendingCredit > 0 ? `, +${pendingCredit} pending` : ""}):` }),
           select,
         ]);
       } else if (kind === "ore") {
@@ -317,7 +317,8 @@ export function initPlanTab(app, container) {
   }
 
   // ============================ Calculate ============================
-  const cargoInput = el("input", { type: "text", value: String(app.settings.cargo_capacity) });
+  const cargoLabel = el("label", { for: "plan-cargo-input", text: "Cargo capacity:" });
+  const cargoInput = el("input", { id: "plan-cargo-input", type: "text", value: String(app.settings.cargo_capacity) });
 
   const resultMatTbody = el("tbody");
   const resultMatTable = el("table", { class: "data-table" }, [
@@ -333,7 +334,8 @@ export function initPlanTab(app, container) {
 
   const missingAssemblyWarning = el("div", { class: "status-warn" });
   const summaryText = el("div", { class: "summary-text" });
-  const pendingBatchesForOreInput = el("input", { type: "text", value: "0", style: "width:70px" });
+  const pendingBatchesForOreLabel = el("label", { for: "plan-pending-batches-input", text: "Batches refining:" });
+  const pendingBatchesForOreInput = el("input", { id: "plan-pending-batches-input", type: "text", value: "0", style: "width:70px" });
   let selectedOreForPending = null;
 
   function sourceLabelFor(result, name, kind, obj) {
@@ -364,19 +366,20 @@ export function initPlanTab(app, container) {
       let displayName = name;
       if (kind === "unknown" && name in result.assemblyHours) displayName = `${name} (Assembly)`;
 
-      const row = el("tr", { "data-item": name }, [
-        el("td", { text: displayName }),
-        el("td", { text: app.kindLabel(name) }),
-        el("td", { text: String(requirements[name]) }),
-        el("td", { text: String(have) }),
-        el("td", { text: String(pending) }),
-        el("td", { text: stillNeed.toFixed(1) }),
-        el("td", { text: source }),
-      ]);
-      row.addEventListener("click", () => {
-        for (const r of resultMatTbody.querySelectorAll("tr")) r.classList.remove("selected");
-        row.classList.add("selected");
-      });
+      const row = selectableRow(
+        { "data-item": name },
+        `Select ${displayName}`,
+        [
+          el("td", { text: displayName }),
+          el("td", { text: app.kindLabel(name) }),
+          el("td", { text: String(requirements[name]) }),
+          el("td", { text: String(have) }),
+          el("td", { text: String(pending) }),
+          el("td", { text: stillNeed.toFixed(1) }),
+          el("td", { text: source }),
+        ],
+        () => {}
+      );
       resultMatTbody.appendChild(row);
     }
   }
@@ -406,23 +409,25 @@ export function initPlanTab(app, container) {
       const value = toMine * ore.value;
       totalValue += value;
       const buildLabel = labels.has(ore) ? [...labels.get(ore)].sort().join(", ") : fallbackLabel;
-      const row = el("tr", { "data-ore": ore.name }, [
-        el("td", { text: ore.name }),
-        el("td", { text: String(ore.law) }),
-        el("td", { text: buildLabel }),
-        el("td", { text: (result.oreRawNeeded.get(ore) || 0).toFixed(1) }),
-        el("td", { text: String(app.inventory.rawQty(ore)) }),
-        el("td", { text: String(batches) }),
-        el("td", { text: toMine.toFixed(1) }),
-        el("td", { text: String(trips) }),
-        el("td", { text: value.toFixed(0) }),
-      ]);
-      row.addEventListener("click", () => {
-        for (const r of resultOreTbody.querySelectorAll("tr")) r.classList.remove("selected");
-        row.classList.add("selected");
-        selectedOreForPending = ore.name;
-        pendingBatchesForOreInput.value = String(app.pendingRefining[ore.name] || 0);
-      });
+      const row = selectableRow(
+        { "data-ore": ore.name },
+        `Select ${ore.name}`,
+        [
+          el("td", { text: ore.name }),
+          el("td", { text: String(ore.law) }),
+          el("td", { text: buildLabel }),
+          el("td", { text: (result.oreRawNeeded.get(ore) || 0).toFixed(1) }),
+          el("td", { text: String(app.inventory.rawQty(ore)) }),
+          el("td", { text: String(batches) }),
+          el("td", { text: toMine.toFixed(1) }),
+          el("td", { text: String(trips) }),
+          el("td", { text: value.toFixed(0) }),
+        ],
+        () => {
+          selectedOreForPending = ore.name;
+          pendingBatchesForOreInput.value = String(app.pendingRefining[ore.name] || 0);
+        }
+      );
       resultOreTbody.appendChild(row);
     }
     return totalValue;
@@ -476,7 +481,7 @@ export function initPlanTab(app, container) {
     const combined = {};
     const contributors = {}; // itemName -> Set(buildName)
     for (const [buildName, entries] of Object.entries(app.builds)) {
-      const totals = entriesToTotals(app, entries);
+      const totals = entriesToTotals(app.recipes, entries);
       const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory);
       for (const [item, qty] of Object.entries(expanded)) {
         combined[item] = (combined[item] || 0) + qty;
@@ -581,8 +586,8 @@ export function initPlanTab(app, container) {
     }
     const stillNeed = (app.lastPlanResult && app.lastPlanResult.itemNeed[itemName]) || 0;
 
-    const oreSelect = el("select", {}, material.sources.map((o) => el("option", { value: o.name, text: o.name })));
-    const batchesInput = el("input", { type: "text", value: "1", style: "width:70px" });
+    const oreSelect = el("select", { id: "refine-ore-select" }, material.sources.map((o) => el("option", { value: o.name, text: o.name })));
+    const batchesInput = el("input", { id: "refine-batches-input", type: "text", value: "1", style: "width:70px" });
     const infoText = el("div", { class: "status-text" });
 
     function updateInfo() {
@@ -629,8 +634,8 @@ export function initPlanTab(app, container) {
       el("div", { class: "modal-box" }, [
         el("h3", { text: `Refine ${itemName}` }),
         el("div", { class: "status-text", text: `Still need: ${stillNeed.toFixed(1)}` }),
-        el("div", { class: "field-row" }, [el("label", { text: "Ore:" }), oreSelect]),
-        el("div", { class: "field-row" }, [el("label", { text: "Batches:" }), batchesInput]),
+        el("div", { class: "field-row" }, [el("label", { for: "refine-ore-select", text: "Ore:" }), oreSelect]),
+        el("div", { class: "field-row" }, [el("label", { for: "refine-batches-input", text: "Batches:" }), batchesInput]),
         infoText,
         el("div", { class: "toolbar" }, [confirmBtn, cancelBtn]),
       ]),
@@ -643,6 +648,7 @@ export function initPlanTab(app, container) {
   container.appendChild(
     el("div", {}, [
       el("div", { class: "toolbar" }, [
+        buildSelectLabel,
         buildSelect,
         el("button", { text: "New Build...", onclick: newBuild }),
         el("button", { class: "danger", text: "Delete Build", onclick: deleteBuild }),
@@ -651,10 +657,11 @@ export function initPlanTab(app, container) {
       buildStatus,
       syncStatus,
       el("h3", { class: "section-title", text: "Add to plan" }),
-      el("div", { class: "toolbar" }, [recipeSelect, recipeQtyInput, el("button", { text: "Add Recipe to Plan", onclick: addRecipeToPlan })]),
-      el("div", { class: "toolbar" }, [materialInput, materialQtyInput, el("button", { text: "Add Item to Plan", onclick: addMaterialToPlan })]),
+      el("div", { class: "toolbar" }, [recipeSelectLabel, recipeSelect, recipeQtyLabel, recipeQtyInput, el("button", { text: "Add Recipe to Plan", onclick: addRecipeToPlan })]),
+      el("div", { class: "toolbar" }, [materialLabel, materialInput, materialQtyLabel, materialQtyInput, el("button", { text: "Add Item to Plan", onclick: addMaterialToPlan })]),
       itemDatalist,
       el("h3", { class: "section-title", text: "Plan items" }),
+      entriesSelectLabel,
       entriesSelect,
       el("div", { class: "toolbar" }, [
         el("button", { text: "Remove Selected", onclick: removePlanItem }),
@@ -665,7 +672,7 @@ export function initPlanTab(app, container) {
       sourcesContainer,
       el("h3", { class: "section-title", text: "Calculate" }),
       el("div", { class: "toolbar" }, [
-        el("label", { text: "Cargo capacity:" }),
+        cargoLabel,
         cargoInput,
         el("button", { text: "Calculate Plan", onclick: calculatePlan }),
         el("button", { text: "Calculate All Builds", onclick: calculateAllBuilds }),
@@ -676,7 +683,7 @@ export function initPlanTab(app, container) {
       el("h3", { class: "section-title", text: "Ore to Mine" }),
       el("div", { class: "scroll-table" }, [resultOreTable]),
       el("div", { class: "toolbar" }, [
-        el("label", { text: "Batches refining:" }),
+        pendingBatchesForOreLabel,
         pendingBatchesForOreInput,
         el("button", { text: "Set for Selected Ore", onclick: updatePendingForSelectedOre }),
       ]),
@@ -689,6 +696,21 @@ export function initPlanTab(app, container) {
   refreshPlanRecipeCombo();
   renderEntriesList();
   renderSyncStatus();
+
+  // Restore whatever build was active last session (persisted so
+  // background.js can also recalculate it headlessly - see storage.js),
+  // or fall back to Build 1 if there's no valid persisted selection (first
+  // ever use, or the persisted build no longer exists). Fire-and-forget:
+  // initPlanTab() itself isn't async, same pattern as dashboard.js's
+  // bootstrap().
+  (async () => {
+    const persisted = await storage.loadActiveBuildName();
+    if (persisted && app.builds[persisted]) {
+      await loadBuild(persisted);
+    } else {
+      await ensureBuildOneAndLoad();
+    }
+  })();
 
   app.refreshHooks.planRecipeCombo = refreshPlanRecipeCombo;
   app.refreshHooks.planCargoCapacity = (cargo) => { cargoInput.value = String(cargo); };

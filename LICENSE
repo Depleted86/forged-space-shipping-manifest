@@ -26,6 +26,17 @@ by, or the responsibility of the copyright holder or of Coops. The
 permission described above applies specifically to this project's
 official, unmodified releases.
 
+Exception: because this project's ability to interact with Forged Space
+exists solely by permission of Coops, Coops may independently authorize a
+third-party developer to duplicate, adapt, or continue this project (or
+build a tool serving an equivalent purpose) for use with Forged Space,
+whether or not such authorization is separately granted by the copyright
+holder. This exists so that a tool like this one doesn't depend on the
+continued availability or consent of any single developer. It does not
+change anything else in this license - such an authorized duplicate is
+still subject to whatever terms Coops sets for it, and does not itself
+grant rights to anyone else.
+
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
 IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE

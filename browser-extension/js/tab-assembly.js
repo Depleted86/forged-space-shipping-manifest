@@ -2,7 +2,7 @@
 // production rate + per-unit input costs). Near-mirror of tab-recipes.js
 // with an added rate_per_hour field, per gui.py's _build_assembly_tab.
 
-import { el, clear } from "./dom-helpers.js";
+import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
 import { AssemblyRecipe } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
@@ -10,16 +10,32 @@ export function initAssemblyTab(app, container) {
   let editingOutput = null; // output item name being edited, or null for new
   let editingRequirements = {};
 
-  const listSelect = el("select", { size: "20", class: "list-select" });
+  const listSelectLabel = el("label", { for: "assembly-list", class: "visually-hidden", text: "Saved Assembly recipes" });
+  const listSelect = el("select", { id: "assembly-list", size: "20", class: "list-select" });
   const outputDatalistId = "assembly-output-datalist";
   const outputDatalist = el("datalist", { id: outputDatalistId });
-  const outputInput = el("input", { type: "text", list: outputDatalistId, placeholder: "Output item (Commodity name)" });
-  const rateInput = el("input", { type: "text", value: "1", style: "width:90px" });
+  // width:auto (overriding the global .field-row label 200px) + flex:1 on
+  // the input, same treatment as Recipes' "Recipe name:" - so these two
+  // field-rows sit as close to their labels as "Item:"/"Qty per unit:" do
+  // below, and outputInput stretches out to the same right edge as the
+  // Add / Update button. rateInput stays a small fixed width like
+  // inputQtyInput does - it's a short number, not a name field.
+  const outputLabel = el("label", { for: "assembly-output-input", text: "Output item:", style: "width: auto; white-space: nowrap;" });
+  const outputInput = el("input", { id: "assembly-output-input", type: "text", list: outputDatalistId, placeholder: "Output item (Commodity name)", style: "flex: 1; min-width: 0;" });
+  // Same candidate set refreshOutputChoices() populates the datalist with -
+  // kept as a live callback (not a snapshot array) so it reflects whatever
+  // is currently in inventory/assemblyRecipes at the moment the user types.
+  enableInlineAutocomplete(outputInput, () => [...new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyRecipes)])]);
+  const rateLabel = el("label", { for: "assembly-rate-input", text: "Rate (units/hour):", style: "width: auto; white-space: nowrap;" });
+  const rateInput = el("input", { id: "assembly-rate-input", type: "text", value: "1", style: "width:90px" });
 
   const inputDatalistId = "assembly-input-datalist";
   const inputDatalist = el("datalist", { id: inputDatalistId }, app.catalog.allItemNames().map((n) => el("option", { value: n })));
-  const inputItemInput = el("input", { type: "text", list: inputDatalistId, placeholder: "Input item" });
-  const inputQtyInput = el("input", { type: "text", value: "1", style: "width:70px" });
+  const inputItemLabel = el("label", { for: "assembly-input-item", text: "Item:" });
+  const inputItemInput = el("input", { id: "assembly-input-item", type: "text", list: inputDatalistId, placeholder: "Start typing to search...", style: "flex: 1; min-width: 0;" });
+  enableInlineAutocomplete(inputItemInput, () => app.catalog.allItemNames());
+  const inputQtyLabel = el("label", { for: "assembly-input-qty", text: "Qty per unit:" });
+  const inputQtyInput = el("input", { id: "assembly-input-qty", type: "text", value: "1", style: "width:70px" });
 
   const reqTbody = el("tbody");
   const reqTable = el("table", { class: "data-table" }, [
@@ -60,15 +76,15 @@ export function initAssemblyTab(app, container) {
   function refreshTree() {
     clear(reqTbody);
     for (const name of Object.keys(editingRequirements).sort()) {
-      const row = el("tr", { "data-item": name }, [
-        el("td", { text: name }),
-        el("td", { text: app.kindLabel(name) }),
-        el("td", { text: String(editingRequirements[name]) }),
-      ]);
-      row.addEventListener("click", () => {
-        inputItemInput.value = name;
-        inputQtyInput.value = String(editingRequirements[name]);
-      });
+      const row = selectableRow(
+        { "data-item": name },
+        `Select ${name}, quantity ${editingRequirements[name]}`,
+        [el("td", { text: name }), el("td", { text: app.kindLabel(name) }), el("td", { text: String(editingRequirements[name]) })],
+        () => {
+          inputItemInput.value = name;
+          inputQtyInput.value = String(editingRequirements[name]);
+        }
+      );
       reqTbody.appendChild(row);
     }
   }
@@ -161,16 +177,11 @@ export function initAssemblyTab(app, container) {
   }
 
   listSelect.addEventListener("change", () => loadIntoEditor(listSelect.value));
-  reqTbody.addEventListener("click", (e) => {
-    const row = e.target.closest("tr");
-    if (!row) return;
-    for (const r of reqTbody.querySelectorAll("tr")) r.classList.remove("selected");
-    row.classList.add("selected");
-  });
 
   container.appendChild(
     el("div", { class: "split-layout" }, [
       el("div", { class: "side-list" }, [
+        listSelectLabel,
         listSelect,
         el("div", { class: "toolbar" }, [
           el("button", { text: "New", onclick: newRecipe }),
@@ -179,10 +190,10 @@ export function initAssemblyTab(app, container) {
       ]),
       el("div", { class: "detail-panel" }, [
         el("div", { class: "hint", text: "Assembly produces a Commodity at a continuous rate (units/hour), each unit costing the listed inputs." }),
-        el("div", { class: "field-row" }, [el("label", { text: "Output item:" }), outputInput]),
+        el("div", { class: "field-row" }, [outputLabel, outputInput]),
         outputDatalist,
-        el("div", { class: "field-row" }, [el("label", { text: "Rate (units/hour):" }), rateInput]),
-        el("div", { class: "toolbar" }, [inputItemInput, inputQtyInput, el("button", { text: "Add / Update", onclick: addInput })]),
+        el("div", { class: "field-row" }, [rateLabel, rateInput]),
+        el("div", { class: "toolbar" }, [inputItemLabel, inputItemInput, inputQtyLabel, inputQtyInput, el("button", { text: "Add / Update", onclick: addInput })]),
         inputDatalist,
         el("div", { class: "scroll-table" }, [reqTable]),
         el("div", { class: "toolbar" }, [

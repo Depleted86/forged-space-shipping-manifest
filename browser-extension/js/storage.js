@@ -33,6 +33,7 @@ const KEYS = {
   builds: "builds",
   toMineData: "toMineData",
   inventorySyncMeta: "inventorySyncMeta",
+  activeBuildName: "activeBuildName",
 };
 
 async function getKey(key, fallback) {
@@ -171,4 +172,18 @@ export async function loadInventorySyncStatus() {
 
 export async function saveInventorySyncStatus(meta) {
   await setKey(KEYS.inventorySyncMeta, meta);
+}
+
+// Which build (by name, matching a key in `builds`) the Plan a Build tab
+// currently has selected, or null for "(unsaved plan)". Persisted (rather
+// than kept only in the dashboard's in-memory `app.activeBuildName`) so
+// background.js can recompute that build's plan headlessly after a live
+// inventory sync, even when the dashboard page isn't open to notice the
+// change itself - see recalculateActiveBuildToMineData() in background.js.
+export async function loadActiveBuildName() {
+  return getKey(KEYS.activeBuildName, null);
+}
+
+export async function saveActiveBuildName(name) {
+  await setKey(KEYS.activeBuildName, name);
 }

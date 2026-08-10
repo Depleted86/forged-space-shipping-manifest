@@ -28,7 +28,13 @@ developer of Forged Space, under the following conditions:
 See [`LICENSE`](./LICENSE) for the actual terms this code is shared under
 — in short: you're welcome to read it, run it for personal use, and open
 Pull Requests, but redistributing modified or competing versions isn't
-permitted without permission.
+permitted without permission (Coops can separately authorize another
+developer to duplicate or continue this project - see `LICENSE` for that
+exception).
+
+See [`PRIVACY.md`](./PRIVACY.md) for the full privacy policy - short
+version: no network requests, no tracking, nothing ever leaves your
+browser.
 
 ## The game changes weekly — expect breakage
 

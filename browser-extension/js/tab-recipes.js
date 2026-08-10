@@ -2,7 +2,7 @@
 // lists). Port of gui.py's _build_recipes_tab and its handlers, including
 // the dirty-check-before-discard pattern.
 
-import { el, clear } from "./dom-helpers.js";
+import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
 import { Recipe } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
@@ -10,13 +10,23 @@ export function initRecipesTab(app, container) {
   let editingRecipe = null; // name of recipe being edited, or null for new
   let editingRequirements = {}; // itemName -> qty, scratch state until Save
 
-  const recipeSelect = el("select", { size: "20", class: "list-select" });
-  const nameInput = el("input", { type: "text", placeholder: "Recipe name" });
+  const recipeSelectLabel = el("label", { for: "recipes-list", class: "visually-hidden", text: "Saved recipes" });
+  const recipeSelect = el("select", { id: "recipes-list", size: "20", class: "list-select" });
+  // width:auto (overriding the global .field-row label 200px, which other
+  // tabs' stacked field-rows rely on for their OWN internal alignment)
+  // plus flex:1 on the input, so "Recipe name:" sits as close to its input
+  // as "Item:" does below it, and the input stretches out to end at the
+  // same right edge as the Add / Update button in the toolbar row below.
+  const nameLabel = el("label", { for: "recipe-name-input", text: "Recipe name:", style: "width: auto; white-space: nowrap;" });
+  const nameInput = el("input", { id: "recipe-name-input", type: "text", placeholder: "Recipe name", style: "flex: 1; min-width: 0;" });
 
   const itemDatalistId = "recipes-item-datalist";
   const itemDatalist = el("datalist", { id: itemDatalistId }, app.catalog.allItemNames().map((n) => el("option", { value: n })));
-  const materialInput = el("input", { type: "text", list: itemDatalistId, placeholder: "Item name" });
-  const qtyInput = el("input", { type: "text", value: "1", style: "width:70px" });
+  const materialLabel = el("label", { for: "recipe-item-input", text: "Item:" });
+  const materialInput = el("input", { id: "recipe-item-input", type: "text", list: itemDatalistId, placeholder: "Start typing to search...", style: "flex: 1; min-width: 0;" });
+  enableInlineAutocomplete(materialInput, () => app.catalog.allItemNames());
+  const qtyLabel = el("label", { for: "recipe-item-qty-input", text: "Qty:" });
+  const qtyInput = el("input", { id: "recipe-item-qty-input", type: "text", value: "1", style: "width:70px" });
 
   const reqTbody = el("tbody");
   const reqTable = el("table", { class: "data-table" }, [
@@ -50,15 +60,15 @@ export function initRecipesTab(app, container) {
   function refreshTree() {
     clear(reqTbody);
     for (const name of Object.keys(editingRequirements).sort()) {
-      const row = el("tr", { "data-item": name }, [
-        el("td", { text: name }),
-        el("td", { text: app.kindLabel(name) }),
-        el("td", { text: String(editingRequirements[name]) }),
-      ]);
-      row.addEventListener("click", () => {
-        materialInput.value = name;
-        qtyInput.value = String(editingRequirements[name]);
-      });
+      const row = selectableRow(
+        { "data-item": name },
+        `Select ${name}, quantity ${editingRequirements[name]}`,
+        [el("td", { text: name }), el("td", { text: app.kindLabel(name) }), el("td", { text: String(editingRequirements[name]) })],
+        () => {
+          materialInput.value = name;
+          qtyInput.value = String(editingRequirements[name]);
+        }
+      );
       reqTbody.appendChild(row);
     }
   }
@@ -138,16 +148,11 @@ export function initRecipesTab(app, container) {
   }
 
   recipeSelect.addEventListener("change", () => loadIntoEditor(recipeSelect.value));
-  reqTbody.addEventListener("click", (e) => {
-    const row = e.target.closest("tr");
-    if (!row) return;
-    for (const r of reqTbody.querySelectorAll("tr")) r.classList.remove("selected");
-    row.classList.add("selected");
-  });
 
   container.appendChild(
     el("div", { class: "split-layout" }, [
       el("div", { class: "side-list" }, [
+        recipeSelectLabel,
         recipeSelect,
         el("div", { class: "toolbar" }, [
           el("button", { text: "New", onclick: newRecipe }),
@@ -155,8 +160,8 @@ export function initRecipesTab(app, container) {
         ]),
       ]),
       el("div", { class: "detail-panel" }, [
-        el("div", { class: "field-row" }, [el("label", { text: "Recipe name:" }), nameInput]),
-        el("div", { class: "toolbar" }, [materialInput, qtyInput, el("button", { text: "Add / Update", onclick: addToEditor })]),
+        el("div", { class: "field-row" }, [nameLabel, nameInput]),
+        el("div", { class: "toolbar" }, [materialLabel, materialInput, qtyLabel, qtyInput, el("button", { text: "Add / Update", onclick: addToEditor })]),
         itemDatalist,
         el("div", { class: "hint", text: "Item can be a refined material, a raw ore (used directly), or any other tracked resource/commodity." }),
         el("div", { class: "scroll-table" }, [reqTable]),

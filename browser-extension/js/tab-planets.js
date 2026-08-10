@@ -11,7 +11,9 @@ export function initPlanetsTab(app, container) {
   let selectedResource = "";
 
   // --- Planet browser ---
+  const searchLabel = el("label", { for: "planets-search-input", text: "Search:" });
   const searchInput = el("input", {
+    id: "planets-search-input",
     type: "text",
     placeholder: "Search planet or resource...",
     oninput: (e) => { planetSearch = e.target.value; renderPlanetTable(); },
@@ -42,9 +44,11 @@ export function initPlanetsTab(app, container) {
   }
 
   // --- Quick rate lookup ---
+  const resourceSelectLabel = el("label", { for: "planets-resource-select", text: "Resource:" });
   const resourceSelect = el(
     "select",
     {
+      id: "planets-resource-select",
       onchange: (e) => { selectedResource = e.target.value; renderHarvesterSummary(); },
     },
     [el("option", { value: "", text: "(choose a resource)" }), ...app.catalog.planetResourceNames().map((n) => el("option", { value: n, text: n }))]
@@ -76,13 +80,15 @@ export function initPlanetsTab(app, container) {
     clear(rosterBody);
     for (let i = 0; i < app.maxHarvesters; i++) {
       const slot = app.harvesterSlots[i] || { resource: null, rate: 0 };
+      const resourceSelId = `harvester-${i}-resource`;
+      const rateInputId = `harvester-${i}-rate`;
       const resourceSel = el(
         "select",
-        {},
+        { id: resourceSelId },
         [el("option", { value: "", text: "(idle)" }), ...app.catalog.planetResourceNames().map((n) => el("option", { value: n, text: n, selected: n === slot.resource ? "" : undefined }))]
       );
       resourceSel.value = slot.resource || "";
-      const rateInput = el("input", { type: "text", value: String(slot.rate ?? 0) });
+      const rateInput = el("input", { id: rateInputId, type: "text", value: String(slot.rate ?? 0) });
 
       const commit = () => updateSlot(i, resourceSel.value, rateInput.value);
       resourceSel.addEventListener("change", commit);
@@ -91,9 +97,9 @@ export function initPlanetsTab(app, container) {
 
       rosterBody.appendChild(
         el("div", { class: "field-row" }, [
-          el("label", { text: `Harvester ${i + 1}:` }),
+          el("label", { for: resourceSelId, text: `Harvester ${i + 1}:` }),
           resourceSel,
-          el("span", { text: "Rate (units/hr):" }),
+          el("label", { for: rateInputId, text: "Rate (units/hr):" }),
           rateInput,
         ])
       );
@@ -110,7 +116,16 @@ export function initPlanetsTab(app, container) {
     }
     app.harvesterSlots[index] = { resource, rate: resource ? rate : 0 };
     await storage.saveHarvesterSlots(app.harvesterSlots);
-    renderRoster();
+    // Deliberately NOT renderRoster() here (only on the invalid-input path
+    // above) - this fires from resourceSel's "change" and rateInput's
+    // "blur", i.e. WHILE the user may still be tabbing through the roster.
+    // renderRoster() tears down and rebuilds every <select>/<input> in the
+    // roster, including whichever one currently has focus - destroying the
+    // focused element mid-Tab-keypress makes the browser lose track of
+    // where "next" should go, which is exactly what caused tabbing to loop
+    // back to Harvester 1 instead of continuing to Harvester 2's rate. The
+    // fields already show the just-committed values (they're the source of
+    // the commit), so nothing here actually needs the roster DOM rebuilt.
     renderUsage();
     renderHarvesterSummary();
   }
@@ -122,10 +137,10 @@ export function initPlanetsTab(app, container) {
 
   container.appendChild(
     el("div", {}, [
-      el("div", { class: "toolbar" }, [el("label", { text: "Search:" }), searchInput]),
+      el("div", { class: "toolbar" }, [searchLabel, searchInput]),
       el("div", { class: "scroll-table" }, [planetTable]),
       el("h3", { class: "section-title", text: "Quick rate lookup" }),
-      el("div", { class: "toolbar" }, [el("label", { text: "Resource:" }), resourceSelect]),
+      el("div", { class: "toolbar" }, [resourceSelectLabel, resourceSelect]),
       summaryLabel,
       el("h3", { class: "section-title", text: `Harvesters (${app.maxHarvesters} max at a time)` }),
       rosterBody,

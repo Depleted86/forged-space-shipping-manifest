@@ -35,6 +35,7 @@
 import "./js/browser-compat.js";
 import { Catalog } from "./js/catalog.js";
 import { applyItemsToInventory } from "./js/inventory-classify.js";
+import { entriesToTotals, expandCommodities, harvesterTotals, planMining, toStorableToMineData } from "./js/calc-engine.js";
 import * as storage from "./js/storage.js";
 
 const catalog = new Catalog();
@@ -93,6 +94,49 @@ async function handleStorageScrape(items) {
   const { matched, unmatched } = applyItemsToInventory(catalog, inventory, itemsDict);
   await storage.saveInventory(inventory);
   await storage.saveInventorySyncStatus({ syncedAt: new Date().toISOString(), matched, unmatched });
+  await recalculateActiveBuildToMineData();
+}
+
+// The previously-calculated "To Mine" plan (toMineData) was computed
+// against the OLD inventory, so it's now stale. dashboard.js has its own
+// storage.onChanged listener that recalculates when the Plan a Build tab
+// notices an inventory change, but that only fires while the dashboard
+// page is actually open - and since switching the floating window back to
+// the compact "To Mine" view fully unloads the dashboard (see popup.js/
+// dashboard.js's same-window navigation), the dashboard is often NOT open
+// during normal play. This headless recalculation is what keeps the
+// floating window's numbers correct in that (common) case. Mirrors
+// tab-plan.js's calculatePlan() math for a single build, except ore
+// choices come from the already-persisted `settings.ore_choices` instead
+// of live <select> elements (there's no DOM here) - the same approach
+// tab-plan.js's own calculateAllBuilds() already uses.
+async function recalculateActiveBuildToMineData() {
+  const activeBuildName = await storage.loadActiveBuildName();
+  if (!activeBuildName) return;
+  const builds = await storage.loadBuilds();
+  const entries = builds[activeBuildName];
+  if (!entries || entries.length === 0) return;
+
+  const recipes = await storage.loadRecipes();
+  const assemblyRecipes = await storage.loadAssemblyRecipes();
+  const inventory = await storage.loadInventory(catalog);
+  const pendingRefining = await storage.loadPendingRefining();
+  const settings = await storage.loadSettings();
+  const maxHarvesters = Number(settings.max_harvesters || 4);
+  const harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
+  const cargoCapacity = Number(settings.cargo_capacity || 600);
+
+  const totals = entriesToTotals(recipes, entries);
+  const { expanded, assemblyHours } = expandCommodities(catalog, totals, assemblyRecipes, inventory);
+
+  const oreChoices = {};
+  for (const [item, oreName] of Object.entries(settings.ore_choices || {})) {
+    const ore = catalog.findOre(oreName);
+    if (ore) oreChoices[item] = ore;
+  }
+
+  const result = planMining(catalog, expanded, inventory, oreChoices, cargoCapacity, harvesterTotals(harvesterSlots), pendingRefining, assemblyHours);
+  await storage.saveToMineData(toStorableToMineData(result, cargoCapacity));
 }
 
 browser.runtime.onMessage.addListener((msg) => {

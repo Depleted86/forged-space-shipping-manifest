@@ -312,3 +312,48 @@ export function planMining(catalog, requirements, inventory, oreChoices, cargoCa
   result.trips = cargoCapacity > 0 ? Math.ceil(result.totalRawToMine / cargoCapacity) : 0;
   return result;
 }
+
+// Scales a Recipe's per-unit requirements by qty, or adds a flat ad-hoc
+// material qty directly. Port of gui.py's _entries_to_totals. Lives here
+// (rather than in tab-plan.js, its only caller until 2026-08-09) so it can
+// also be imported by background.js's headless plan recalculation without
+// pulling any DOM-touching UI module into the service worker context -
+// this function only ever touches the plain `recipes` map passed in, never
+// the DOM.
+export function entriesToTotals(recipes, entries) {
+  const totals = {};
+  for (const [kind, name, qty] of entries) {
+    if (kind === "recipe") {
+      const recipe = recipes[name];
+      if (!recipe) continue;
+      for (const [item, itemQty] of Object.entries(recipe.scaled(qty))) {
+        totals[item] = (totals[item] || 0) + itemQty;
+      }
+    } else {
+      totals[name] = (totals[name] || 0) + qty;
+    }
+  }
+  return totals;
+}
+
+// PlanResult (Ore/Material Map keys) -> the plain JSON shape the floating
+// "To Mine" window (popup.js) expects, matching the old bridge_server.py's
+// build_payload exactly. Moved here alongside entriesToTotals for the same
+// DOM-free-importability reason.
+export function toStorableToMineData(result, cargoCapacity) {
+  if (!result) return { available: false, ores: [] };
+  const ores = [];
+  for (const [ore, toMine] of result.oreToMine.entries()) {
+    if (toMine <= 0) continue;
+    const trips = cargoCapacity > 0 ? Math.ceil(toMine / cargoCapacity) : 0;
+    ores.push({ name: ore.name, law: ore.law, to_mine: Math.round(toMine * 10) / 10, trips, value_cr: Math.round(toMine * ore.value) });
+  }
+  ores.sort((a, b) => b.to_mine - a.to_mine);
+  return {
+    available: true,
+    cargo_capacity: cargoCapacity,
+    total_raw_to_mine: Math.round(result.totalRawToMine * 10) / 10,
+    trips: result.trips,
+    ores,
+  };
+}
