@@ -51,6 +51,14 @@ body {
   font-size: 14px;
 }
 
+a {
+  color: var(--cyan-dim);
+}
+
+a:hover {
+  color: var(--cyan);
+}
+
 .app-header {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);

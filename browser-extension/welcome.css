@@ -26,6 +26,14 @@ body {
   padding: 32px 16px;
 }
 
+a {
+  color: var(--cyan-dim);
+}
+
+a:hover {
+  color: var(--cyan);
+}
+
 .welcome-card {
   max-width: 560px;
   width: 100%;

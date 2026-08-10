@@ -1,8 +1,8 @@
-# Privacy Policy — Forged Space Calculator
+# Privacy Policy — Forged Space Shipping Manifest
 
 _Last updated: 2026-08-09_
 
-Forged Space Calculator is a browser extension for the game
+Forged Space Shipping Manifest is a browser extension for the game
 [Forged Space](https://forgedspace.com), developed with explicit
 permission from Coops, the game's developer. This policy explains, in
 plain terms, what the extension does and does not do with your data.

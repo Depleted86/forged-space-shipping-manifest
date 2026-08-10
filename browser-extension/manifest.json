@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Forged Space Calculator",
+  "name": "Forged Space Shipping Manifest",
   "version": "3.0",
   "description": "Mining/refining/harvesting/assembly planner for Forged Space, with a live To-Mine popup and inventory sync built into the extension - no separate desktop app required.",
   "permissions": [
@@ -22,7 +22,7 @@
     }
   ],
   "action": {
-    "default_title": "Forged Space Calculator",
+    "default_title": "Forged Space Shipping Manifest",
     "default_icon": {
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",

@@ -1,4 +1,4 @@
-# Forged Space Calculator
+# Forged Space Shipping Manifest
 
 A browser extension (Chrome, Firefox, Edge) that helps plan mining trips
 for the game [Forged Space](https://forgedspace.com): tracks ore/material

@@ -20,7 +20,7 @@ import { el } from "./dom-helpers.js";
 export function initAboutTab(app, container) {
   container.appendChild(
     el("div", { class: "about-panel" }, [
-      el("h2", { text: "About Forged Space Calculator" }),
+      el("h2", { text: "About Forged Space Shipping Manifest" }),
       el("p", { text: "This extension was developed with explicit permission from Coops, the developer of Forged Space." }),
       el("p", {
         text: "It makes no network requests of any kind and never transmits anything anywhere. The only data it stores is your own Forged Space game data (inventory, recipes, builds, and settings), saved locally in your browser and nowhere else.",
@@ -28,9 +28,11 @@ export function initAboutTab(app, container) {
       el("p", {
         text: "It is strictly read-only: it only reads what's already on the page you're looking at. It never clicks anything, fills in a form, or takes any action in the game on your behalf.",
       }),
-      el("p", {
-        text: "The source code is public so you (or anyone) can verify all of the above for yourself, rather than just taking our word for it.",
-      }),
+      el("p", {}, [
+        "The source code is public on ",
+        el("a", { href: "https://github.com/Depleted86/forged-space-calculator", target: "_blank", rel: "noopener noreferrer", text: "GitHub" }),
+        " so you (or anyone) can verify all of the above for yourself, rather than just taking our word for it.",
+      ]),
       el("p", {
         text: "This is an independently maintained fan tool, not an official part of the game. Forged Space itself is still being actively rebuilt, and its pages can be restyled or rewritten with no notice - when that happens, this extension can break in ways that look wrong or show bad numbers. If something stops working after a Forged Space update, that means this extension needs fixing - not that your game or your save is broken.",
       }),
