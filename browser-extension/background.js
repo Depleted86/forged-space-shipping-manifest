@@ -12,7 +12,7 @@
 // in the background the whole time the browser is open. This is fine for
 // this file: handleStorageScrape() and the action click handler are both
 // pure event-response functions with no reliance on state surviving between
-// invocations (see findToMineWindow() below, which deliberately queries
+// invocations (see findManifestWindow() below, which deliberately queries
 // live window state each time instead of remembering a window id in a
 // variable, since any such variable would silently reset to its initial
 // value every time the worker restarts).
@@ -23,14 +23,26 @@
 // relay was needed), and the dashboard's Plan a Build tab writes that key
 // on every calculation.
 //
-// The toolbar icon opens/focuses that "Manifest" window as a real floating
-// browser window (type: "popup"), not an action dropdown - a dropdown
-// always closes on blur/outside-click with no way to override that, which
-// didn't fit the user's ask for something that stays open and can be
-// dragged beside the game window. The dashboard is reached by navigating
-// that SAME window (popup.js's "Dashboard" button sets window.location),
-// not by opening a separate tab - see popup.js and dashboard.js's
-// "← Manifest" switcher for the round trip.
+// The toolbar icon opens/focuses a single floating browser window (type:
+// "popup"), not an action dropdown - a dropdown always closes on blur/
+// outside-click with no way to override that, which didn't fit the user's
+// ask for something that stays open and can be dragged beside the game
+// window. That SAME window can show either the full dashboard.html or the
+// compact popup.html ("Manifest") - popup.js's "Dashboard →" button and
+// dashboard.js's "← Manifest" button both just navigate it in place
+// (window.location), not open a separate tab.
+//
+// The toolbar icon opens straight into the DASHBOARD, not the compact
+// Manifest view - deliberately, since browser.windows.create() can bake
+// the target size in at creation time with no race to worry about, unlike
+// resizing an already-open window right before/after a same-window
+// navigation (which is exactly what made switching TO the dashboard
+// unreliable on Chrome - see popup.js's/dashboard.js's own comments on
+// that). A first-time/every-time player lands somewhere they can actually
+// see everything and set builds up, then switches to the compact Manifest
+// view themselves once ready - that transition (dashboard -> Manifest) has
+// popup.js's own resizeToFit() as a reliable, independently-working
+// correction step once it loads, so it doesn't have the same problem.
 
 import "./js/browser-compat.js";
 import { Catalog } from "./js/catalog.js";
@@ -44,37 +56,51 @@ const catalog = new Catalog();
 // the extension is installed - NOT on every browser start or on updates
 // (details.reason is "install" only once, ever, per install; "update" fires
 // on every version bump and "browser_update" on browser upgrades, neither
-// of which should re-show this).
-browser.runtime.onInstalled.addListener((details) => {
+// of which should re-show this). async + awaited (not fire-and-forget) for
+// the same reason as the onMessage listener below - an async listener that
+// returns a Promise is one of the recognized ways Chrome keeps an MV3
+// service worker alive until it settles, on this and other "extendable"
+// events like action.onClicked.
+browser.runtime.onInstalled.addListener(async (details) => {
   if (details.reason !== "install") return;
-  browser.tabs.create({ url: browser.runtime.getURL("welcome.html") });
+  await browser.tabs.create({ url: browser.runtime.getURL("welcome.html") });
 });
 
-// Finds an already-open "Manifest" window by looking for a tab pointing at
-// this extension's own popup.html - not by remembering a window id, since
-// an in-memory variable wouldn't survive a service-worker restart. Reading
-// tab.url for the extension's own pages doesn't require the "tabs"
-// permission (only reading OTHER sites' tab URLs does).
-async function findToMineWindow() {
+// Matches popup.js's/dashboard.js's own DASHBOARD_WIDTH/HEIGHT - kept as a
+// separate copy here too rather than shared/imported, same reasoning as
+// dashboard.js's own copy (these files don't otherwise share a module, and
+// it's just two numbers).
+const DASHBOARD_WIDTH = 1000;
+const DASHBOARD_HEIGHT = 700;
+
+// Finds an already-open floating window by looking for a tab pointing at
+// EITHER of this extension's own pages - popup.html ("Manifest") or
+// dashboard.html, whichever it currently happens to be showing - not by
+// remembering a window id, since an in-memory variable wouldn't survive a
+// service-worker restart. Reading tab.url for the extension's own pages
+// doesn't require the "tabs" permission (only reading OTHER sites' tab
+// URLs does).
+async function findManifestWindow() {
   const popupUrl = browser.runtime.getURL("popup.html");
+  const dashboardUrl = browser.runtime.getURL("dashboard.html");
   const wins = await browser.windows.getAll({ populate: true });
-  return wins.find((win) => win.tabs && win.tabs.some((tab) => tab.url === popupUrl)) || null;
+  return wins.find((win) => win.tabs && win.tabs.some((tab) => tab.url === popupUrl || tab.url === dashboardUrl)) || null;
 }
 
 browser.action.onClicked.addListener(async () => {
-  const existing = await findToMineWindow();
+  const existing = await findManifestWindow();
   if (existing) {
     await browser.windows.update(existing.id, { focused: true });
     return;
   }
-  // Small starting size - popup.js measures its own rendered content and
-  // resizes this window to fit (widest row / row count) right after first
-  // render, so this is just a placeholder that's visible for a moment.
+  // Full dashboard size baked in at creation time - see this file's header
+  // comment for why opening straight into dashboard.html (rather than the
+  // compact popup.html) is deliberate.
   await browser.windows.create({
-    url: browser.runtime.getURL("popup.html"),
+    url: browser.runtime.getURL("dashboard.html"),
     type: "popup",
-    width: 300,
-    height: 160,
+    width: DASHBOARD_WIDTH,
+    height: DASHBOARD_HEIGHT,
   });
 });
 
@@ -267,14 +293,36 @@ async function handleSetPendingBatches(oreName, newBatches) {
   await recalculateActiveBuildCorpData();
 }
 
-browser.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === "fsc-storage-scrape") {
-    handleStorageScrape(msg.items);
-  } else if (msg && msg.type === "fsc-corp-store-scrape") {
-    handleCorpStoreScrape(msg.items);
-  } else if (msg && msg.type === "fsc-assembler-scrape") {
-    handleAssemblerScrape(msg.items);
-  } else if (msg && msg.type === "fsc-set-pending-batches") {
-    handleSetPendingBatches(msg.oreName, msg.batches);
-  }
+// Returning `true` (and eventually calling sendResponse) - rather than just
+// firing the handler and letting the listener return undefined - keeps the
+// message port open, which is what tells Chrome's MV3 service worker there's
+// still pending async work and it shouldn't be terminated yet. Without this,
+// a fire-and-forget handleXxx() call can get cut off mid-await the instant
+// this synchronous listener function returns: Chrome considers the message
+// "handled" immediately and is free to kill the worker right then, before
+// e.g. storage.savePendingRefining() ever actually runs. Firefox's
+// background page (see manifest.json's "scripts" fallback, used there
+// instead of a real MV3 service worker) doesn't get torn down anywhere near
+// as aggressively, which is why this only ever showed up testing on real
+// Chrome - a scrape handler dropped this way silently self-corrects on the
+// next ~2s poll, but a one-off action like setting a batch count has no
+// retry, so losing it here is immediately visible. None of the callers
+// (popup.js/content.js) care about the actual response value, only that the
+// message succeeded - see their own `.catch(() => {})`.
+browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg) return undefined;
+  let handled;
+  if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items);
+  else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
+  else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
+  else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
+  else return undefined;
+  // sendResponse() itself can throw if the sender's port is already gone
+  // (e.g. the Manifest popup window got closed in the moment between
+  // sending this and the handler finishing) - wrapped so that edge case is
+  // just silently ignored rather than becoming an unhandled rejection, same
+  // as the senders' own `.catch(() => {})` already treats a failed send.
+  const respond = () => { try { sendResponse(); } catch { /* sender gone, nothing to respond to */ } };
+  handled.then(respond).catch(respond);
+  return true;
 });

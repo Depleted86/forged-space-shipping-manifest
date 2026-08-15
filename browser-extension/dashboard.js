@@ -158,6 +158,12 @@ async function bootstrap() {
   });
 }
 
+// Matches popup.js's own DASHBOARD_WIDTH/HEIGHT constants - kept as a
+// separate copy rather than shared/imported since these two files don't
+// otherwise share any module, and it's just two numbers.
+const DASHBOARD_WIDTH = 1000;
+const DASHBOARD_HEIGHT = 700;
+
 // The dashboard can now load inside the same floating "Manifest" window
 // (see popup.js's "Dashboard" button, which navigates that window here
 // instead of opening a separate tab) as well as a normal browser tab. The
@@ -170,8 +176,79 @@ async function setupToMineSwitch() {
   const win = await browser.windows.getCurrent();
   if (win.type !== "popup") return;
   btn.style.display = "";
-  btn.addEventListener("click", () => {
+
+  // Authoritative resize-up, run from THIS page's own already-loaded
+  // context - not relying solely on popup.js's "Dashboard →" button, which
+  // resizes the OLD document right before navigating away from it. That
+  // pre-navigation resize is still worth keeping as a head start (it
+  // starts the window growing immediately on click, before this page has
+  // even loaded), but the browser doesn't guarantee a size change
+  // requested against a document that's about to be replaced actually
+  // carries over cleanly to the incoming page's renderer - this is what
+  // showed up as the dashboard rendering "collapsed" the first time you
+  // switched to it. Only grows (never shrinks) - a player who's manually
+  // resized the dashboard bigger for their own comfort shouldn't get
+  // snapped back down just from reloading/renavigating here.
+  //
+  // Deliberately NOT queried/applied immediately at module-load time - right
+  // after a cross-page navigation, Chrome's window manager can still be
+  // mid-settle from whatever popup.js's own pre-navigation resize just did,
+  // and both reading win.width/height AND issuing windows.update() too
+  // early in that window can silently no-op (no error, no effect) rather
+  // than actually reporting/applying the real size - this is what showed up
+  // as the dashboard sometimes not resizing AT ALL on the very first
+  // switch, only starting to work again once something else (e.g. manually
+  // nudging the window) forced Chrome to catch up. A short delay via
+  // window.onload + an extra tick gives that settling time to happen before
+  // this reads/acts on the window's geometry at all. Fire-and-forget (not
+  // awaited) so it can't delay attaching the click listener below - a very
+  // fast click during that delay should still work immediately, not get
+  // silently missed because the listener wasn't wired up yet.
+  (async () => {
+    await new Promise((resolve) => {
+      if (document.readyState === "complete") resolve();
+      else window.addEventListener("load", resolve, { once: true });
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    try {
+      const freshWin = await browser.windows.getCurrent();
+      if (freshWin.width < DASHBOARD_WIDTH || freshWin.height < DASHBOARD_HEIGHT) {
+        const centerX = freshWin.left + freshWin.width / 2;
+        const centerY = freshWin.top + freshWin.height / 2;
+        const left = Math.round(centerX - DASHBOARD_WIDTH / 2);
+        const top = Math.round(centerY - DASHBOARD_HEIGHT / 2);
+        await browser.windows.update(freshWin.id, { width: DASHBOARD_WIDTH, height: DASHBOARD_HEIGHT, left, top });
+      }
+    } catch (err) {
+      console.warn("Couldn't resize dashboard window to full size:", err);
+    }
+  })();
+
+  btn.addEventListener("click", async () => {
     if (!app.confirmNavigateAway()) return;
+    // Shrink back down toward the Manifest popup's compact footprint BEFORE
+    // navigating, mirroring popup.js's own "Dashboard →" button (which
+    // grows the window before switching this way) - same centered-resize
+    // approach, for the same reason documented there (window.screen's
+    // available-area APIs aren't reliable across monitors, and
+    // browser.system.display needs its own permission and isn't even
+    // implemented in Firefox). Without this, the window sits at the full
+    // dashboard size until popup.js's own resizeToFit() finishes its own
+    // async round trip through storage after the page loads - this just
+    // gets it into the right neighborhood immediately so that doesn't read
+    // as a stuck/broken layout in the meantime.
+    try {
+      const current = await browser.windows.getCurrent();
+      const width = 320;
+      const height = 160;
+      const centerX = current.left + current.width / 2;
+      const centerY = current.top + current.height / 2;
+      const left = Math.round(centerX - width / 2);
+      const top = Math.round(centerY - height / 2);
+      await browser.windows.update(current.id, { width, height, left, top });
+    } catch (err) {
+      console.warn("Couldn't resize before switching to Manifest:", err);
+    }
     window.location.href = "popup.html";
   });
 }

@@ -1,17 +1,20 @@
-// Content for the floating "Manifest" window (opened by background.js's
-// action.onClicked as a type:"popup" browser window, not an action
-// dropdown - see background.js for why). Shows the last computed plan
+// Content for the floating "Manifest" view - the compact counterpart to
+// dashboard.html within the SAME floating browser window (type:"popup",
+// not an action dropdown - see background.js for why). The toolbar icon
+// itself opens straight into the dashboard (see background.js's
+// action.onClicked), so this page is only ever reached by navigating here
+// from there via the "← Manifest" button, or by re-focusing an existing
+// window already sitting on this view. Shows the last computed plan
 // without touching the game page's DOM at all - replaces the older
 // approach of injecting a panel directly into forgedspace.com's UI (see
 // content.js's header comment for why that was reverted).
 //
-// The "Dashboard" button switches THIS SAME window to the full dashboard
-// (dashboard.html has its own "← Manifest" button to switch back) rather
-// than opening a separate tab, per the user's ask for a single window that
-// toggles between the compact list and the full planner. Since the
-// dashboard needs real width for its result tables (unlike this window,
-// which is deliberately kept small - see resizeToFit()), the window is
-// resized up before navigating away.
+// The "Dashboard" button switches THIS SAME window back to the full
+// dashboard rather than opening a separate tab, per the user's ask for a
+// single window that toggles between the compact list and the full
+// planner. Since the dashboard needs real width for its result tables
+// (unlike this window, which is deliberately kept small - see
+// resizeToFit()), the window is resized up before navigating away.
 
 import "./js/browser-compat.js";
 
@@ -545,6 +548,16 @@ document.getElementById("switch-to-dashboard").addEventListener("click", async (
   // Wrapped in try/catch so that if resizing/repositioning fails for any
   // reason, navigation to the dashboard still happens regardless - a
   // cosmetic positioning miss should never block the actual button action.
+  //
+  // This is only a head start, not the authoritative resize - it resizes
+  // THIS (about-to-be-replaced) document right before navigating away, and
+  // the browser doesn't guarantee that carries over cleanly to the
+  // incoming dashboard.html's own renderer (this is what showed up as the
+  // dashboard rendering "collapsed" on the first switch). dashboard.js's
+  // own setupToMineSwitch() re-applies this same resize from its own
+  // already-loaded context once it arrives, which is what actually fixes
+  // it reliably - this just makes the window start growing immediately on
+  // click instead of only after the new page has finished loading.
   try {
     const win = await browser.windows.getCurrent();
     const centerX = win.left + win.width / 2;

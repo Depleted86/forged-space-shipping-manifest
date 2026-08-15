@@ -108,8 +108,15 @@ function checkCorpStore() {
   if (items.length === 0) return;
   const snapshot = JSON.stringify(items);
   if (snapshot === lastCorpSnapshot) return;
-  lastCorpSnapshot = snapshot;
-  browser.runtime.sendMessage({ type: "fsc-corp-store-scrape", items }).catch(() => {});
+  // Only marked "sent" once background.js actually confirms it (see its
+  // onMessage listener's sendResponse() call) - not optimistically before
+  // sending. A dropped/failed send otherwise gets silently marked as
+  // already-handled here, with the poll loop never retrying it since the
+  // snapshot comparison above would keep matching on every future tick.
+  browser.runtime
+    .sendMessage({ type: "fsc-corp-store-scrape", items })
+    .then(() => { lastCorpSnapshot = snapshot; })
+    .catch(() => {});
 }
 
 // Same bounded-polling approach as elsewhere in this project - a plain
@@ -134,8 +141,11 @@ function checkStorage() {
   if (items.length === 0) return;
   const snapshot = JSON.stringify(items);
   if (snapshot === lastStorageSnapshot) return;
-  lastStorageSnapshot = snapshot;
-  browser.runtime.sendMessage({ type: "fsc-storage-scrape", items }).catch(() => {});
+  // See checkCorpStore()'s comment - only marked "sent" once confirmed.
+  browser.runtime
+    .sendMessage({ type: "fsc-storage-scrape", items })
+    .then(() => { lastStorageSnapshot = snapshot; })
+    .catch(() => {});
 }
 
 // Assembler Plans screen: a reference database of every producible item -
@@ -245,7 +255,14 @@ function checkAssemblerPlans() {
   if (scraped.length === 0) return;
   const snapshot = `${filter}|${JSON.stringify(scraped)}`;
   if (snapshot === lastAssemblerSnapshot) return;
-  lastAssemblerSnapshot = snapshot;
+  // Only marked "sent" once background.js actually confirms it - see
+  // checkCorpStore()'s comment for why. This matters MORE here than for
+  // storage/Corp Store: this screen is a static reference database (per
+  // this file's header comment above), not live-changing game state, so a
+  // dropped send here would never get superseded by a later, different
+  // snapshot - the poll loop would just keep matching "already sent"
+  // forever with nothing ever actually saved.
+  let items;
   if (filter === "All Plans") {
     // Every row on this screen is something built at the Assembly (it has a
     // rate/hr regardless of which gate, if any, it's behind) - this whole
@@ -253,15 +270,18 @@ function checkAssemblerPlans() {
     // separate set of category screens (Weapons, Defence, Reactors, etc.);
     // importing from there was explored and deliberately shelved (see
     // js/tab-recipes.js's header comment) - Recipes stay hand-entered only.
-    browser.runtime.sendMessage({ type: "fsc-assembler-scrape", items: scraped }).catch(() => {});
+    items = scraped;
   } else {
     // "R&D Unlocked" is a subset of the same data, already filtered by the
     // game itself - re-applying the per-row checkmark is just a second
     // guard, redundant with "All Plans" above but harmless.
-    const items = scraped.filter((item) => item.rdMet);
+    items = scraped.filter((item) => item.rdMet);
     if (items.length === 0) return;
-    browser.runtime.sendMessage({ type: "fsc-assembler-scrape", items }).catch(() => {});
   }
+  browser.runtime
+    .sendMessage({ type: "fsc-assembler-scrape", items })
+    .then(() => { lastAssemblerSnapshot = snapshot; })
+    .catch(() => {});
 }
 
 setInterval(checkStorage, STORAGE_POLL_MS);
