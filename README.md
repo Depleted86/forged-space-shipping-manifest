@@ -4,7 +4,9 @@ A browser extension (Chrome, Firefox, Edge) that helps plan mining trips
 for the game [Forged Space](https://forgedspace.com): tracks ore/material
 recipes, planet harvesting, Assembly commodity chains, and your live
 in-game inventory, then works out exactly what still needs to be mined for
-a given build.
+a given build. Also tracks corp orders against the corp's shared Store,
+with CSV export/import for coordinating with corp-mates who'd rather work
+from a spreadsheet.
 
 This is an independent fan tool, not an official part of the game.
 
@@ -72,7 +74,7 @@ owner.
 - `browser-extension/` — the extension itself (Manifest V3). See
   `dashboard.html`/`dashboard.js` for the main planner UI, `content.js`
   for the (strictly read-only) game-page scraper, `background.js` for the
-  service worker, and `popup.html`/`popup.js` for the floating "To Mine"
+  service worker, and `popup.html`/`popup.js` for the floating "Manifest"
   window.
 - `browser-extension/test/` — `node --test` suite for the calculation
   engine (`js/calc-engine.js`), checked against golden-master fixtures.

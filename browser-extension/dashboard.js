@@ -16,6 +16,7 @@ import { initInventoryTab } from "./js/tab-inventory.js";
 import { initRecipesTab } from "./js/tab-recipes.js";
 import { initAssemblyTab } from "./js/tab-assembly.js";
 import { initPlanTab } from "./js/tab-plan.js";
+import { initCorpTab } from "./js/tab-corp.js";
 import { initSettingsTab } from "./js/tab-settings.js";
 import { initAboutTab } from "./js/tab-about.js";
 
@@ -37,10 +38,28 @@ const app = {
   assemblyRecipes: {},
   builds: {},
   activeBuildName: null,
+  corpInventory: {},
+  corpHaveOverrides: {},
+  activeCorpBuildName: null,
   planBaseRequirements: {},
   planRequirements: {},
   lastPlanResult: null,
   refreshHooks: {}, // tabId -> () => void, tabs register themselves here
+  unsavedGuards: {}, // tabId -> () => boolean, tabs with an in-progress edit register a "do I have unsaved changes right now" check here
+  // Checked before any full-page navigation that would tear down every
+  // tab's in-memory scratch state at once (see setupToMineSwitch() below) -
+  // in-tab navigation (switching the selected recipe, clicking New/Delete)
+  // already guards this per-tab via each tab's own confirmDiscard(), but
+  // nothing previously protected the one point where the whole page itself
+  // gets replaced, silently discarding whatever was mid-edit.
+  confirmNavigateAway() {
+    for (const isDirty of Object.values(this.unsavedGuards)) {
+      if (isDirty && isDirty()) {
+        return confirm("You have unsaved changes that will be lost if you leave this page. Continue anyway?");
+      }
+    }
+    return true;
+  },
   kindLabel(name) {
     return kindLabel(this.catalog, name);
   },
@@ -64,6 +83,9 @@ async function bootstrap() {
   app.pendingRefining = await storage.loadPendingRefining();
   app.assemblyRecipes = await storage.loadAssemblyRecipes();
   app.builds = await storage.loadBuilds();
+  app.corpInventory = await storage.loadCorpInventory();
+  app.corpHaveOverrides = await storage.loadCorpHaveOverrides();
+  app.activeCorpBuildName = await storage.loadActiveCorpBuildName();
 
   initOreDatabaseTab(app, document.getElementById("tab-ore-database"));
   initPlanetsTab(app, document.getElementById("tab-planets"));
@@ -71,6 +93,7 @@ async function bootstrap() {
   initRecipesTab(app, document.getElementById("tab-recipes"));
   initAssemblyTab(app, document.getElementById("tab-assembly"));
   initPlanTab(app, document.getElementById("tab-plan"));
+  initCorpTab(app, document.getElementById("tab-corp"));
   initSettingsTab(app, document.getElementById("tab-settings"));
   initAboutTab(app, document.getElementById("tab-about"));
 
@@ -96,13 +119,49 @@ async function bootstrap() {
     if (changes.inventorySyncMeta && app.refreshHooks.inventory) {
       app.refreshHooks.inventory();
     }
+    if (changes.corpInventory) {
+      storage.loadCorpInventory().then((inv) => {
+        app.corpInventory = inv;
+        if (app.refreshHooks.corp) app.refreshHooks.corp();
+      });
+    }
+    if (changes.corpHaveOverrides) {
+      storage.loadCorpHaveOverrides().then((haveOverrides) => {
+        app.corpHaveOverrides = haveOverrides;
+        if (app.refreshHooks.corp) app.refreshHooks.corp();
+      });
+    }
+    if (changes.recipes) {
+      storage.loadRecipes().then((recipes) => {
+        app.recipes = recipes;
+        if (app.refreshHooks.recipes) app.refreshHooks.recipes();
+      });
+    }
+    if (changes.assemblyRecipes) {
+      storage.loadAssemblyRecipes().then((assemblyRecipes) => {
+        app.assemblyRecipes = assemblyRecipes;
+        if (app.refreshHooks.assembly) app.refreshHooks.assembly();
+      });
+    }
+    // Plan a Build already refreshes its own build selector directly after
+    // its own add/delete/complete actions (see tab-plan.js's
+    // refreshBuildCombo() call sites) - this is for everyone ELSE: the Corp
+    // tab's build dropdown (and prefill data) otherwise goes stale the
+    // moment a build is renamed/deleted/completed, whether that happened
+    // elsewhere on this same page or in a second dashboard window entirely.
+    if (changes.builds) {
+      storage.loadBuilds().then((builds) => {
+        app.builds = builds;
+        if (app.refreshHooks.corp) app.refreshHooks.corp();
+      });
+    }
   });
 }
 
-// The dashboard can now load inside the same floating "To Mine" window
+// The dashboard can now load inside the same floating "Manifest" window
 // (see popup.js's "Dashboard" button, which navigates that window here
 // instead of opening a separate tab) as well as a normal browser tab. The
-// "← To Mine" switcher only makes sense in the former case - popup.html's
+// "← Manifest" switcher only makes sense in the former case - popup.html's
 // content is sized/styled for a small chrome-less popup window, so
 // navigating a full normal tab to it would just look broken (tiny content
 // floating in an otherwise full-size tab with an address bar above it).
@@ -112,6 +171,7 @@ async function setupToMineSwitch() {
   if (win.type !== "popup") return;
   btn.style.display = "";
   btn.addEventListener("click", () => {
+    if (!app.confirmNavigateAway()) return;
     window.location.href = "popup.html";
   });
 }

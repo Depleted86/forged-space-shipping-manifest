@@ -9,6 +9,10 @@ import * as storage from "./storage.js";
 export function initAssemblyTab(app, container) {
   let editingOutput = null; // output item name being edited, or null for new
   let editingRequirements = {};
+  // Captain Level requirement, when known - display-only stat carried over
+  // from an Assembler Plans import (see background.js's
+  // handleAssemblerScrape()), never used to gate anything here.
+  let editingCaptainLevel = null;
 
   const listSelectLabel = el("label", { for: "assembly-list", class: "visually-hidden", text: "Saved Assembly recipes" });
   const listSelect = el("select", { id: "assembly-list", size: "20", class: "list-select" });
@@ -28,12 +32,24 @@ export function initAssemblyTab(app, container) {
   enableInlineAutocomplete(outputInput, () => [...new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyRecipes)])]);
   const rateLabel = el("label", { for: "assembly-rate-input", text: "Rate (units/hour):", style: "width: auto; white-space: nowrap;" });
   const rateInput = el("input", { id: "assembly-rate-input", type: "text", value: "1", style: "width:90px" });
+  const capLevelInfo = el("div", { class: "status-text" });
+  const saveStatus = el("div", { class: "status-text" });
 
+  function refreshCapLevelInfo() {
+    capLevelInfo.textContent = editingCaptainLevel != null ? `Captain Level required: ${editingCaptainLevel}` : "";
+  }
+
+  // An Assembly recipe's own inputs can include another Assembly-produced
+  // part, not just raw/refined catalog items - so that name needs to be
+  // pickable here too, same reasoning as tab-recipes.js's "Item:" field.
+  function inputItemCandidates() {
+    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyRecipes)])];
+  }
   const inputDatalistId = "assembly-input-datalist";
-  const inputDatalist = el("datalist", { id: inputDatalistId }, app.catalog.allItemNames().map((n) => el("option", { value: n })));
+  const inputDatalist = el("datalist", { id: inputDatalistId }, inputItemCandidates().map((n) => el("option", { value: n })));
   const inputItemLabel = el("label", { for: "assembly-input-item", text: "Item:" });
   const inputItemInput = el("input", { id: "assembly-input-item", type: "text", list: inputDatalistId, placeholder: "Start typing to search...", style: "flex: 1; min-width: 0;" });
-  enableInlineAutocomplete(inputItemInput, () => app.catalog.allItemNames());
+  enableInlineAutocomplete(inputItemInput, inputItemCandidates);
   const inputQtyLabel = el("label", { for: "assembly-input-qty", text: "Qty per unit:" });
   const inputQtyInput = el("input", { id: "assembly-input-qty", type: "text", value: "1", style: "width:70px" });
 
@@ -92,12 +108,15 @@ export function initAssemblyTab(app, container) {
   function clearEditor() {
     editingOutput = null;
     editingRequirements = {};
+    editingCaptainLevel = null;
     outputInput.value = "";
     rateInput.value = "1";
     inputItemInput.value = "";
     inputQtyInput.value = "1";
+    saveStatus.textContent = "";
     refreshTree();
     refreshListbox();
+    refreshCapLevelInfo();
   }
 
   function newRecipe() {
@@ -123,17 +142,20 @@ export function initAssemblyTab(app, container) {
     editingOutput = name;
     const recipe = app.assemblyRecipes[name];
     editingRequirements = { ...(recipe?.requirements || {}) };
+    editingCaptainLevel = recipe?.captainLevel ?? null;
     outputInput.value = name;
     rateInput.value = String(recipe?.ratePerHour ?? 1);
+    saveStatus.textContent = "";
     refreshTree();
     refreshListbox();
+    refreshCapLevelInfo();
   }
 
   function addInput() {
     const name = inputItemInput.value.trim();
     const qty = parseFloat(inputQtyInput.value);
-    if (!name || Number.isNaN(qty)) {
-      alert("Enter an item name and a numeric quantity.");
+    if (!name || Number.isNaN(qty) || qty <= 0) {
+      alert("Enter an item name and a positive quantity.");
       return;
     }
     if (app.kindLabel(name) === "Commodity") {
@@ -167,13 +189,18 @@ export function initAssemblyTab(app, container) {
     }
     const recipe = new AssemblyRecipe(outputItem, rate);
     for (const [itemName, qty] of Object.entries(editingRequirements)) recipe.setRequirement(itemName, qty);
+    recipe.captainLevel = editingCaptainLevel;
     if (editingOutput && editingOutput !== outputItem) delete app.assemblyRecipes[editingOutput];
     app.assemblyRecipes[outputItem] = recipe;
     await storage.saveAssemblyRecipes(app.assemblyRecipes);
     editingOutput = outputItem;
     refreshListbox();
     refreshOutputChoices();
-    alert(`Saved Assembly recipe for "${outputItem}".`);
+    // Inline, non-blocking - unlike the alert()s above (genuine input
+    // errors worth interrupting for), a routine successful save shouldn't
+    // make the player click through a dialog every single time.
+    saveStatus.textContent = `Saved Assembly recipe for "${outputItem}".`;
+    saveStatus.className = "status-text status-ok";
   }
 
   listSelect.addEventListener("change", () => loadIntoEditor(listSelect.value));
@@ -193,6 +220,7 @@ export function initAssemblyTab(app, container) {
         el("div", { class: "field-row" }, [outputLabel, outputInput]),
         outputDatalist,
         el("div", { class: "field-row" }, [rateLabel, rateInput]),
+        capLevelInfo,
         el("div", { class: "toolbar" }, [inputItemLabel, inputItemInput, inputQtyLabel, inputQtyInput, el("button", { text: "Add / Update", onclick: addInput })]),
         inputDatalist,
         el("div", { class: "scroll-table" }, [reqTable]),
@@ -200,6 +228,7 @@ export function initAssemblyTab(app, container) {
           el("button", { text: "Remove Selected Input", onclick: removeSelected }),
           el("button", { text: "Save Assembly Recipe", onclick: saveEditor }),
         ]),
+        saveStatus,
       ]),
     ])
   );
@@ -207,6 +236,14 @@ export function initAssemblyTab(app, container) {
   refreshOutputChoices();
   refreshListbox();
   refreshTree();
+  refreshCapLevelInfo();
 
-  app.refreshHooks.assembly = () => refreshOutputChoices();
+  // Also refreshes the saved-list (not the in-progress edit form) when
+  // assemblyRecipes change externally - e.g. an Assembler Plans import from
+  // background.js while this tab is already open.
+  app.refreshHooks.assembly = () => {
+    refreshOutputChoices();
+    refreshListbox();
+  };
+  app.unsavedGuards.assembly = hasUnsavedChanges;
 }

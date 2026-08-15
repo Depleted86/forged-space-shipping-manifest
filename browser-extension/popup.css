@@ -57,6 +57,34 @@ body {
   border-color: var(--cyan-dim);
 }
 
+.view-toggle {
+  flex: 0 0 auto;
+  display: flex;
+  background: var(--bg-panel-alt);
+  border-bottom: 1px solid var(--border);
+}
+
+.view-toggle-btn {
+  flex: 1 1 0;
+  background: transparent;
+  color: var(--text-dim);
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 6px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.view-toggle-btn:hover {
+  color: var(--text);
+}
+
+.view-toggle-btn[aria-pressed="true"] {
+  color: var(--cyan);
+  border-bottom-color: var(--cyan-dim);
+}
+
 .ore-list {
   flex: 1 1 auto;
   overflow-y: auto;
@@ -87,6 +115,92 @@ body {
 
 .ore-row:last-child {
   margin-bottom: 0;
+}
+
+.section-label {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}
+
+.section-label.sub-label {
+  padding-left: 16px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+  opacity: 0.85;
+}
+
+/* A Refined group header carrying batch-tracking controls (Personal only -
+   see renderRefinedGroups()) needs flex layout instead of the plain
+   single-text-node .section-label assumes, same reasoning the old
+   .mining-row treatment had before batch tracking moved here. */
+.sub-label-with-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sub-label-with-controls > span:first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.batch-controls {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.batch-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.batch-input {
+  /* Fallback only - popup.js sets an inline width per row, sized to however
+     many digits that row's "remaining" count has (ch = width of "0" in the
+     current font), so a low-remaining row gets a narrower box than one
+     that's still in the hundreds. */
+  width: 2ch;
+  font-size: 11px;
+  padding: 2px 2px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: var(--bg-panel-alt);
+  color: var(--text);
+  text-align: center;
+}
+
+.batch-input:focus {
+  outline: none;
+  border-color: var(--cyan-dim);
+}
+
+.batch-remaining {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* Distinct tint so Assembly rows read as their own category rather than
+   continuing the ore rows' orange/cyan alternation. */
+.assembly-row {
+  background: rgba(167, 139, 250, 0.16);
+}
+
+.planetary-row {
+  background: rgba(74, 222, 128, 0.14);
 }
 
 .empty-message {

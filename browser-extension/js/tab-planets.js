@@ -109,8 +109,8 @@ export function initPlanetsTab(app, container) {
   async function updateSlot(index, resourceValue, rateValue) {
     const resource = resourceValue || null;
     const rate = parseFloat(rateValue);
-    if (Number.isNaN(rate)) {
-      alert("Invalid rate - enter a number.");
+    if (Number.isNaN(rate) || rate < 0) {
+      alert("Invalid rate - enter a number 0 or greater.");
       renderRoster();
       return;
     }

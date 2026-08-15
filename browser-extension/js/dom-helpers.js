@@ -28,10 +28,6 @@ export function clear(node) {
   while (node.firstChild) node.removeChild(node.firstChild);
 }
 
-export function option(value, label, selected = false) {
-  return el("option", { value, selected: selected ? "" : undefined, text: label });
-}
-
 // Creates a <tr> for the "click a row to select/load it" pattern used by
 // the Recipes and Assembly tabs' requirement tables, and the Plan tab's
 // result tables (materials needed / ore to mine) - previously four

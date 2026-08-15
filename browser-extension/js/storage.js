@@ -21,6 +21,16 @@ export const DEFAULT_SETTINGS = {
   cargo_capacity: 600,
   ore_choices: {},
   max_harvesters: 4,
+  // { itemName: "buy" } - per-item override for Assembly-produced
+  // Commodities, set from the Plan a Build tab's "Item sources" list. Any
+  // name absent from this map defaults to "mine" (existing behavior:
+  // cascades down into its own raw/refined ingredient needs via
+  // expandCommodities()). "buy" skips that cascade for just that one item -
+  // it shows up as a flat "buy N of this" quantity instead, for players who
+  // choose to acquire that specific part directly (market/corp/trade)
+  // rather than personally assemble it - while everything else still mines/
+  // assembles normally.
+  item_acquisition_mode: {},
 };
 
 const KEYS = {
@@ -34,6 +44,10 @@ const KEYS = {
   toMineData: "toMineData",
   inventorySyncMeta: "inventorySyncMeta",
   activeBuildName: "activeBuildName",
+  corpInventory: "corpInventory",
+  corpToMineData: "corpToMineData",
+  activeCorpBuildName: "activeCorpBuildName",
+  corpHaveOverrides: "corpHaveOverrides",
 };
 
 async function getKey(key, fallback) {
@@ -45,12 +59,19 @@ async function setKey(key, value) {
   await browser.storage.local.set({ [key]: value });
 }
 
+// Storage shape changed from a bare { itemName: qty } requirements dict per
+// recipe to a wrapper { requirements: {...}, captain_level } once recipes
+// gained a captainLevel stat - `entry.requirements` (truthy only on the new
+// shape, since no real item is ever literally named "requirements") tells
+// the two apart, so recipes saved before this change still load correctly.
 export async function loadRecipes() {
   const raw = await getKey(KEYS.recipes, {});
   const recipes = {};
-  for (const [name, reqs] of Object.entries(raw)) {
+  for (const [name, entry] of Object.entries(raw)) {
     const recipe = new Recipe(name);
-    for (const [itemName, qty] of Object.entries(reqs)) recipe.setRequirement(itemName, qty);
+    const reqs = entry && entry.requirements ? entry.requirements : entry;
+    for (const [itemName, qty] of Object.entries(reqs || {})) recipe.setRequirement(itemName, qty);
+    recipe.captainLevel = entry && entry.captain_level != null ? entry.captain_level : null;
     recipes[name] = recipe;
   }
   return recipes;
@@ -58,7 +79,9 @@ export async function loadRecipes() {
 
 export async function saveRecipes(recipes) {
   const raw = {};
-  for (const [name, recipe] of Object.entries(recipes)) raw[name] = { ...recipe.requirements };
+  for (const [name, recipe] of Object.entries(recipes)) {
+    raw[name] = { requirements: { ...recipe.requirements }, captain_level: recipe.captainLevel ?? null };
+  }
   await setKey(KEYS.recipes, raw);
 }
 
@@ -116,6 +139,7 @@ export async function loadAssemblyRecipes() {
   for (const [outputItem, entry] of Object.entries(raw)) {
     const recipe = new AssemblyRecipe(outputItem, entry.rate_per_hour ?? 1);
     for (const [itemName, qty] of Object.entries(entry.requirements || {})) recipe.setRequirement(itemName, qty);
+    recipe.captainLevel = entry.captain_level != null ? entry.captain_level : null;
     assemblyRecipes[outputItem] = recipe;
   }
   return assemblyRecipes;
@@ -124,7 +148,7 @@ export async function loadAssemblyRecipes() {
 export async function saveAssemblyRecipes(assemblyRecipes) {
   const raw = {};
   for (const [outputItem, recipe] of Object.entries(assemblyRecipes)) {
-    raw[outputItem] = { rate_per_hour: recipe.ratePerHour, requirements: { ...recipe.requirements } };
+    raw[outputItem] = { rate_per_hour: recipe.ratePerHour, requirements: { ...recipe.requirements }, captain_level: recipe.captainLevel ?? null };
   }
   await setKey(KEYS.assemblyRecipes, raw);
 }
@@ -186,4 +210,62 @@ export async function loadActiveBuildName() {
 
 export async function saveActiveBuildName(name) {
   await setKey(KEYS.activeBuildName, name);
+}
+
+// { itemName: quantity } scraped from the corporation's Store screen
+// (Offices > Store > Corp Store panel). Deliberately a plain name->qty dict,
+// not a classified Inventory like personal storage - corp-store comparisons
+// are a flat need-vs-have per named item (see toStorableCorpData()), not run
+// through the ore/refining mining pipeline the way personal stock is.
+export async function loadCorpInventory() {
+  return getKey(KEYS.corpInventory, {});
+}
+
+export async function saveCorpInventory(corpInventory) {
+  await setKey(KEYS.corpInventory, corpInventory);
+}
+
+// The last computed corp-store need/have comparison for the active build, in
+// the shape toStorableCorpData() returns. Consumed by the toolbar popup's
+// Corp view (popup.js).
+export async function loadCorpToMineData() {
+  return getKey(KEYS.corpToMineData, { available: false, items: [] });
+}
+
+export async function saveCorpToMineData(data) {
+  await setKey(KEYS.corpToMineData, data);
+}
+
+// Which build (by name, matching a key in `builds`) is being tracked
+// against the Corp Store, on the Corp tab. Deliberately separate from
+// activeBuildName - a corp project (e.g. an Outpost buildout) is usually a
+// different thing entirely from whichever build a player has personally
+// selected in Plan a Build, so the two selections shouldn't be forced to
+// track each other.
+export async function loadActiveCorpBuildName() {
+  return getKey(KEYS.activeCorpBuildName, null);
+}
+
+// { itemName: qty } - a SHARED (not personal) manually-reported "known
+// total have," set inline in the Corp tab's main comparison table and
+// distributed to other players via Export/Import CSV (see
+// toStorableCorpData()'s `haveOverrides` param in calc-engine.js). Exists
+// for a corp-mate with visibility a live scrape can't provide - e.g.
+// someone holding a large stash on a "bank alt" they swept deposits into -
+// to report the real total so everyone else's shortfall reflects it, not
+// just whatever their own limited Corp Store view happens to show. When
+// set for an item, this takes precedence over the live corpInventory
+// balance for that item entirely (it's presumed more authoritative, coming
+// from someone who actually checked); items absent from this dict fall
+// back to that live balance exactly as before.
+export async function loadCorpHaveOverrides() {
+  return getKey(KEYS.corpHaveOverrides, {});
+}
+
+export async function saveCorpHaveOverrides(haveOverrides) {
+  await setKey(KEYS.corpHaveOverrides, haveOverrides);
+}
+
+export async function saveActiveCorpBuildName(name) {
+  await setKey(KEYS.activeCorpBuildName, name);
 }

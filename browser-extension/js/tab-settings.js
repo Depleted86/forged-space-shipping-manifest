@@ -45,10 +45,27 @@ export function initSettingsTab(app, container) {
   // browser.storage.local has no built-in export UI, and its data is scoped
   // to the extension's ID - reinstalling under a different ID (e.g. after
   // changing browser_specific_settings.gecko.id) starts with empty storage.
-  // Export dumps the 7 data keys as JSON for safekeeping; Import writes a
-  // pasted blob of that same shape back in (also doubles as the one-time
-  // migration path from the old Python app's export_for_extension.py).
-  const BACKUP_KEYS = ["recipes", "inventory", "settings", "harvesters", "pendingRefining", "assemblyRecipes", "builds"];
+  // Export dumps every genuine source-of-truth data key as JSON for
+  // safekeeping; Import writes a pasted blob of that same shape back in
+  // (also doubles as the one-time migration path from the old Python app's
+  // export_for_extension.py). Deliberately excludes the purely-derived/
+  // cache keys (toMineData, corpToMineData, inventorySyncMeta) - those are
+  // just the last computed plan result and a sync timestamp, recalculated
+  // automatically the moment the relevant tab loads, so backing them up
+  // would only ever restore something instantly stale.
+  const BACKUP_KEYS = [
+    "recipes",
+    "inventory",
+    "settings",
+    "harvesters",
+    "pendingRefining",
+    "assemblyRecipes",
+    "builds",
+    "activeBuildName",
+    "corpInventory",
+    "activeCorpBuildName",
+    "corpHaveOverrides",
+  ];
 
   const exportTextarea = el("textarea", { rows: "6", style: "width:100%;font-family:monospace;font-size:12px", placeholder: "Click Export to fill this in..." });
   const exportStatus = el("div", { class: "status-text" });

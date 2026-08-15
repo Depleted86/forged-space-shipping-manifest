@@ -8,10 +8,8 @@
   --text-dim: #94a3b8;
   --cyan: #67e8f9;
   --cyan-dim: #22d3ee;
-  --orange: #fb923c;
   --green: #4ade80;
   --red: #f87171;
-  --yellow: #facc15;
 }
 
 * {
@@ -60,6 +58,9 @@ a:hover {
 }
 
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-panel);
@@ -184,6 +185,21 @@ button:disabled {
   cursor: not-allowed;
 }
 
+/* Corp tab's "Mark Corp Order Complete" / "Delete Corp Order" - same fixed
+   width for both (sized to comfortably fit the longer label on one line)
+   so the pair reads as one deliberate matched set of actions, not two
+   differently-sized buttons that happen to sit next to each other.
+   white-space:nowrap + flex:none is needed on top of width alone - these
+   sit in a `.field-row` flex container, and a flex item's default
+   min-width:auto lets its own text force it wider (or wrap) regardless of
+   an explicit width unless both are pinned down. */
+.corp-order-btn {
+  flex: none;
+  width: 220px;
+  white-space: nowrap;
+  text-align: center;
+}
+
 table.data-table {
   width: 100%;
   border-collapse: collapse;
@@ -269,6 +285,16 @@ table.data-table tbody tr.selected {
   font-weight: 600;
 }
 
+/* Flags a text input holding a value that failed validation, without the
+   interruption of an alert() - used where alerting on every keystroke/blur
+   would be disruptive (e.g. the Corp tab's bulk per-item quantity grid,
+   where dozens of inputs exist side by side and a typo in one shouldn't
+   block filling in the rest). */
+.field-invalid {
+  border-color: var(--red) !important;
+  outline: 1px solid var(--red);
+}
+
 .summary-text {
   color: var(--cyan);
   font-weight: 600;
@@ -301,10 +327,169 @@ table.data-table tbody tr.selected {
   white-space: normal;
 }
 
+/* Nested under an Assembly item set to "Mine" - its own fully-expanded raw
+   resource breakdown (see itemResourceBreakdown() in calc-engine.js).
+   Indented and dimmer than a normal Item sources row, and pulled tighter to
+   the row above it (margin-top negative-ish via reduced margin-bottom on
+   both), so the whole run of sub-items visually reads as attached to their
+   parent Assembly row rather than as more top-level items. */
+.sources-container > .field-row.source-subitem {
+  margin-left: 24px;
+  margin-bottom: 2px;
+}
+
+.sources-container > .field-row.source-subitem label {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
 .hint {
   color: var(--text-dim);
   font-size: 11px;
   margin: 4px 0 10px 0;
+}
+
+/* Corp tab's bulk entry grid (tab-corp.js's "Create Corp Plan") - 5
+   category columns side by side, each independently scrollable so a long
+   category (e.g. Commodities) doesn't stretch the whole grid's height. */
+.corp-plan-grid {
+  margin: 10px 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel-alt);
+}
+
+.corp-plan-columns {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+}
+
+.corp-plan-category {
+  flex: 1 1 0;
+  min-width: 190px;
+  max-height: 480px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  /* No top padding here - see the h4 rule below for why. */
+  padding: 0 8px 8px;
+  background: var(--bg-panel);
+}
+
+.corp-plan-category h4 {
+  /* The container's own top padding would leave a gap ABOVE the sticky
+     point that isn't covered by anything's background - rows scroll up
+     into that gap and stay visible above the header instead of
+     disappearing behind it. Moved that spacing onto the header's own
+     padding-top instead, since padding (unlike a container's padding when
+     a sticky descendant is involved) IS actually covered by the element's
+     background. Bottom padding, for the same reason position:sticky's
+     margin doesn't get covered by background: scrolled rows would pass
+     through a margin gap the same way. */
+  margin: 0;
+  padding: 8px 0 6px;
+  color: var(--cyan);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  top: 0;
+  background: var(--bg-panel);
+  /* position:sticky alone doesn't guarantee paint order - without an
+     explicit z-index, rows scrolling underneath (later in DOM order) can
+     still paint ON TOP of the header instead of being covered by it. */
+  z-index: 1;
+}
+
+/* Narrower label/input than the global .field-row default (200px label
+   would overflow a ~190px-wide column) - same "scope an override to this
+   specific container" approach as .sources-container above. */
+.corp-plan-category .field-row {
+  gap: 4px;
+  margin-bottom: 3px;
+}
+
+.corp-plan-category .field-row label {
+  width: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.corp-plan-category .field-row input {
+  flex: 0 0 auto;
+  width: 55px;
+}
+
+/* Corp tab's main comparison table - the Have column is a directly
+   editable input (see tab-corp.js's buildHaveInput()), not plain text like
+   every other cell, so it needs to look inline/unobtrusive rather than
+   like a normal form field sitting in a table. */
+.corp-have-input {
+  width: 70px;
+  font-size: 13px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  background: var(--bg-panel-alt);
+  color: inherit;
+  text-align: right;
+}
+
+.corp-have-input:focus {
+  outline: none;
+  border-color: var(--cyan-dim);
+}
+
+/* Corp tab's main table - clickable category group header (Ore/Refined/
+   Assembly/Planetary/Commodity), collapsing/expanding its rows - see
+   tab-corp.js's renderRows(). A <tr> with a single colspan'd <td>, styled
+   to read like a section heading rather than a data row. */
+.corp-category-header {
+  cursor: pointer;
+}
+
+.corp-category-header td {
+  padding: 6px 8px;
+  color: var(--cyan);
+  font-weight: 600;
+  background: var(--bg-panel-alt);
+}
+
+.corp-category-header:hover td {
+  background: rgba(34, 211, 238, 0.1);
+}
+
+/* Sits between the sticky header and the scrolling row list - lets a
+   genuinely missing item (Commodities especially, which has no master list
+   anywhere in this extension) be added straight into the right column. */
+.corp-plan-add-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.corp-plan-add-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.corp-plan-add-qty {
+  flex: 0 0 auto;
+  width: 40px;
+  font-size: 12px;
+}
+
+.corp-plan-add-row button {
+  flex: 0 0 auto;
+  padding: 0 8px;
 }
 
 .modal-overlay {

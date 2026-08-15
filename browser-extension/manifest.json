@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Forged Space Shipping Manifest",
-  "version": "3.0",
-  "description": "Mining/refining/harvesting/assembly planner for Forged Space, with a live To-Mine popup and inventory sync built into the extension - no separate desktop app required.",
+  "version": "3.1",
+  "description": "Mining/refining/harvesting/assembly planner for Forged Space, with a live Manifest popup, corp-order tracking, and inventory sync built into the extension - no separate desktop app required.",
   "permissions": [
     "storage"
   ],
@@ -27,14 +27,16 @@
       "16": "icons/icon-16.png",
       "32": "icons/icon-32.png",
       "48": "icons/icon-48.png",
-      "96": "icons/icon-96.png"
+      "96": "icons/icon-96.png",
+      "128": "icons/icon-128.png"
     }
   },
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
     "48": "icons/icon-48.png",
-    "96": "icons/icon-96.png"
+    "96": "icons/icon-96.png",
+    "128": "icons/icon-128.png"
   },
   "browser_specific_settings": {
     "gecko": {

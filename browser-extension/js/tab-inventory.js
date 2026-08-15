@@ -2,7 +2,7 @@
 // not a manual refresh - there's no CSV fallback here) + pending-refining
 // tracker. Port of gui.py's _build_inventory_tab and its handlers.
 
-import { el, clear } from "./dom-helpers.js";
+import { el, clear, selectableRow } from "./dom-helpers.js";
 import * as storage from "./storage.js";
 
 // Deducts (newBatches - oldBatches) * ore.batch raw ore from inventory
@@ -50,7 +50,14 @@ export function initInventoryTab(app, container) {
     const rows = [];
     for (const [ore, qty] of app.inventory.rawOre.entries()) rows.push(["Raw Ore", ore.name, qty]);
     for (const [mat, qty] of app.inventory.refined.entries()) rows.push(["Refined", mat.name, qty]);
-    for (const [name, qty] of Object.entries(app.inventory.other)) rows.push(["Commodity", name, qty]);
+    // inventory.other holds both true Commodities (Assembly outputs) and
+    // planet-harvested resources - they're stored the same flat way since
+    // both are read identically during planning (see planMining()'s
+    // `else { have = inventory.other[name] ... }` branch), but the display
+    // label should still tell them apart. kindLabel() re-classifies each
+    // name against the full catalog (including planetResources), rather
+    // than assuming everything here is a Commodity.
+    for (const [name, qty] of Object.entries(app.inventory.other)) rows.push([app.kindLabel(name), name, qty]);
     rows.sort((a, b) => a[0].localeCompare(b[0]) || a[1].localeCompare(b[1]));
 
     const needle = search.trim().toLowerCase();
@@ -84,16 +91,12 @@ export function initInventoryTab(app, container) {
       const rawCommitted = batches * ore.batch;
       const outputAmount = batches * ore.refinedQ;
       const outputsStr = ore.outputs.map((m) => `${m.name} +${outputAmount}`).join(", ");
-      const row = el("tr", { "data-ore": oreName }, [
-        el("td", { text: oreName }),
-        el("td", { text: String(batches) }),
-        el("td", { text: String(rawCommitted) }),
-        el("td", { text: outputsStr }),
-      ]);
-      row.addEventListener("click", () => {
-        for (const r of pendingTbody.querySelectorAll("tr")) r.classList.remove("selected");
-        row.classList.add("selected");
-      });
+      const row = selectableRow(
+        { "data-ore": oreName },
+        `Select ${oreName}, ${batches} batches pending`,
+        [el("td", { text: oreName }), el("td", { text: String(batches) }), el("td", { text: String(rawCommitted) }), el("td", { text: outputsStr })],
+        () => {}
+      );
       pendingTbody.appendChild(row);
     }
   }
@@ -101,8 +104,8 @@ export function initInventoryTab(app, container) {
   async function setPendingRefining() {
     const oreName = pendingOreSelect.value;
     const batches = parseInt(pendingBatchesInput.value, 10);
-    if (!oreName || Number.isNaN(batches)) {
-      alert("Choose an ore and enter a whole number of batches.");
+    if (!oreName || Number.isNaN(batches) || batches < 0) {
+      alert("Choose an ore and enter a whole number of batches (0 or more).");
       return;
     }
     const ore = app.catalog.findOre(oreName);

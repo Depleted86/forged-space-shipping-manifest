@@ -13,8 +13,8 @@
 // moved to calc-engine.js (2026-08-09) so background.js can import them for
 // headless recalculation - see recalculateActiveBuildToMineData() there.
 
-import { el, clear, selectableRow } from "./dom-helpers.js";
-import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData } from "./calc-engine.js";
+import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
+import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown } from "./calc-engine.js";
 import * as storage from "./storage.js";
 import { applyLocalPendingDeduction } from "./tab-inventory.js";
 
@@ -24,7 +24,7 @@ function formatHours(hours) {
 
 // list of [oreName, batches] for every pending-refining ore whose outputs
 // include `materialName`. Port of gui.py's _pending_credit_contributors.
-export function pendingCreditContributors(app, materialName) {
+function pendingCreditContributors(app, materialName) {
   const out = [];
   for (const [oreName, batches] of Object.entries(app.pendingRefining)) {
     if (batches <= 0) continue;
@@ -75,11 +75,46 @@ export function initPlanTab(app, container) {
     await loadBuild(name);
   }
 
+  // ore_choices and item_acquisition_mode (both in app.settings, keyed by
+  // item name) never had anything removing entries from them - a name
+  // picked once stuck around in settings forever, even after every build
+  // that ever needed it was long gone. Not worth pruning on every single
+  // item add/remove (a momentarily-removed item might just be getting
+  // re-added), but a whole build finishing its lifecycle - deleted or
+  // completed - is the natural moment to sweep anything no other
+  // surviving build still references. Call AFTER app.builds has already
+  // had the build in question removed.
+  async function pruneStaleItemSettings() {
+    const buyModes = app.settings.item_acquisition_mode || {};
+    const stillNeeded = new Set();
+    for (const entries of Object.values(app.builds)) {
+      const totals = entriesToTotals(app.recipes, entries);
+      for (const name of Object.keys(totals)) stillNeeded.add(name);
+      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory, 20, buyModes);
+      for (const name of Object.keys(expanded)) stillNeeded.add(name);
+    }
+    let changed = false;
+    for (const name of Object.keys(app.settings.ore_choices || {})) {
+      if (!stillNeeded.has(name)) {
+        delete app.settings.ore_choices[name];
+        changed = true;
+      }
+    }
+    for (const name of Object.keys(buyModes)) {
+      if (!stillNeeded.has(name)) {
+        delete buyModes[name];
+        changed = true;
+      }
+    }
+    if (changed) await storage.saveSettings(app.settings);
+  }
+
   async function deleteBuild() {
     if (!app.activeBuildName) return;
     if (!confirm(`Delete build "${app.activeBuildName}"? This does not touch pending refining or inventory.`)) return;
     delete app.builds[app.activeBuildName];
     await storage.saveBuilds(app.builds);
+    await pruneStaleItemSettings();
     // Falls back to Build 1 (recreated fresh if it was the one just
     // deleted) rather than landing in the old "(unsaved plan)" state -
     // there's always a build selected now, never a generic placeholder.
@@ -112,6 +147,7 @@ export function initPlanTab(app, container) {
 
     delete app.builds[app.activeBuildName];
     await storage.saveBuilds(app.builds);
+    await pruneStaleItemSettings();
     // Same fallback as deleteBuild() - see the comment there.
     await ensureBuildOneAndLoad();
   }
@@ -135,7 +171,7 @@ export function initPlanTab(app, container) {
     } else {
       // Otherwise a build with nothing in it yet (e.g. freshly created)
       // would silently leave whichever OTHER build's numbers were last
-      // calculated sitting in toMineData, making the floating "To Mine"
+      // calculated sitting in toMineData, making the floating "Manifest"
       // window show a plan that has nothing to do with the build now
       // actually selected.
       await storage.saveToMineData({ available: false });
@@ -181,8 +217,8 @@ export function initPlanTab(app, container) {
   async function addRecipeToPlan() {
     const name = recipeSelect.value;
     const qty = parseFloat(recipeQtyInput.value);
-    if (!name || Number.isNaN(qty)) {
-      alert("Choose a recipe and enter a numeric quantity.");
+    if (!name || Number.isNaN(qty) || qty <= 0) {
+      alert("Choose a recipe and enter a positive quantity.");
       return;
     }
     planEntries.push(["recipe", name, qty]);
@@ -190,18 +226,30 @@ export function initPlanTab(app, container) {
     await saveActiveBuild();
   }
 
+  // Ad-hoc item candidates = every catalog item (ore/material/planet
+  // resource) PLUS every Assembly-produced Commodity name - a build can
+  // directly need a finished assembled part (e.g. "Graviton Emitters"), not
+  // just raw/refined materials, so that name has to be pickable here too.
+  // A live callback (not a snapshot array), same reasoning as Assembly's own
+  // output-item field in tab-assembly.js: always reflects whatever's
+  // currently in app.assemblyRecipes, including anything just imported from
+  // the Assembler Plans screen.
+  function adhocItemCandidates() {
+    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyRecipes)])];
+  }
   const itemDatalistId = "plan-item-datalist";
-  const itemDatalist = el("datalist", { id: itemDatalistId }, app.catalog.allItemNames().map((n) => el("option", { value: n })));
+  const itemDatalist = el("datalist", { id: itemDatalistId }, adhocItemCandidates().map((n) => el("option", { value: n })));
   const materialLabel = el("label", { for: "plan-material-input", class: "visually-hidden", text: "Item name" });
   const materialInput = el("input", { id: "plan-material-input", type: "text", list: itemDatalistId, placeholder: "Item name" });
+  enableInlineAutocomplete(materialInput, adhocItemCandidates);
   const materialQtyLabel = el("label", { for: "plan-material-qty", class: "visually-hidden", text: "Item quantity" });
-  const materialQtyInput = el("input", { id: "plan-material-qty", type: "text", value: "0", style: "width:70px" });
+  const materialQtyInput = el("input", { id: "plan-material-qty", type: "text", value: "1", style: "width:70px" });
 
   async function addMaterialToPlan() {
     const name = materialInput.value.trim();
     const qty = parseFloat(materialQtyInput.value);
-    if (!name || Number.isNaN(qty)) {
-      alert("Enter an item name and a numeric quantity.");
+    if (!name || Number.isNaN(qty) || qty <= 0) {
+      alert("Enter an item name and a positive quantity.");
       return;
     }
     planEntries.push(["material", name, qty]);
@@ -229,6 +277,7 @@ export function initPlanTab(app, container) {
   }
 
   async function clearPlan() {
+    if (planEntries.length > 0 && !confirm(`Clear all ${planEntries.length} item(s) from build "${app.activeBuildName}"? This cannot be undone.`)) return;
     planEntries = [];
     renderEntriesList();
     await saveActiveBuild();
@@ -241,7 +290,7 @@ export function initPlanTab(app, container) {
     summaryText.textContent = "";
     missingAssemblyWarning.textContent = "";
     app.lastPlanResult = null;
-    // Without this, the toolbar's "To Mine" popup keeps showing whatever
+    // Without this, the toolbar's "Manifest" popup keeps showing whatever
     // was last calculated even after the build it came from was deleted,
     // completed, or explicitly cleared here - stale, potentially
     // mine-the-wrong-thing-misleading data with nothing on screen
@@ -259,7 +308,9 @@ export function initPlanTab(app, container) {
   async function buildRequirements() {
     const totals = entriesToTotals(app.recipes, planEntries);
     app.planBaseRequirements = totals;
-    const { expanded, assemblyHours } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory);
+    app.settings.item_acquisition_mode = app.settings.item_acquisition_mode || {};
+    const buyModes = app.settings.item_acquisition_mode;
+    const { expanded, assemblyHours } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory, 20, buyModes);
     app.planRequirements = expanded;
 
     clear(sourcesContainer);
@@ -277,7 +328,6 @@ export function initPlanTab(app, container) {
       if (need <= 0) continue;
       anyShown = true;
 
-      let row;
       if (kind === "material") {
         const selectId = `plan-source-${sourceRowIndex++}`;
         const select = el(
@@ -288,28 +338,82 @@ export function initPlanTab(app, container) {
         const savedChoice = app.settings.ore_choices?.[name];
         select.value = obj.sources.some((o) => o.name === savedChoice) ? savedChoice : obj.sources[0]?.name || "";
         planSourceSelects[name] = select;
-        row = el("div", { class: "field-row" }, [
-          el("label", { for: selectId, text: `${name} (refined, need ${need.toFixed(1)}${pendingCredit > 0 ? `, +${pendingCredit} pending` : ""}):` }),
-          select,
-        ]);
+        sourcesContainer.appendChild(
+          el("div", { class: "field-row" }, [
+            el("label", { for: selectId, text: `${name} (refined, need ${need.toFixed(1)}${pendingCredit > 0 ? `, +${pendingCredit} pending` : ""}):` }),
+            select,
+          ])
+        );
       } else if (kind === "ore") {
-        row = el("div", { class: "field-row" }, [el("label", { text: `${name} (raw ore, used directly, need ${need.toFixed(1)})` })]);
+        sourcesContainer.appendChild(
+          el("div", { class: "field-row" }, [el("label", { text: `${name} (raw ore, used directly, need ${need.toFixed(1)})` })])
+        );
       } else if (kind === "planet_resource") {
         const rate = (harvesterTotals(app.harvesterSlots)[name]) || 0;
         const hoursText = rate > 0 ? formatHours(need / rate) : "no harvesters assigned";
-        row = el("div", { class: "field-row" }, [
-          el("label", { class: "status-ok", text: `${name} — found on: ${obj.planetTypes.map((p) => p.name).join(", ")} — need ${need.toFixed(1)} — ${hoursText}` }),
+        sourcesContainer.appendChild(
+          el("div", { class: "field-row" }, [
+            el("label", { class: "status-ok", text: `${name} — found on: ${obj.planetTypes.map((p) => p.name).join(", ")} — need ${need.toFixed(1)} — ${hoursText}` }),
+          ])
+        );
+      } else if (app.assemblyRecipes[name]) {
+        // Commodity with a known Assembly recipe - per-item choice: "Mine"
+        // cascades it into its own ingredient needs (same as always) and
+        // shows a sub-category breakdown of the fully-expanded raw
+        // resources that costs, right under this row; "Buy" leaves it flat
+        // (no cascade, no breakdown) for a player who'd rather acquire that
+        // specific part directly. Persisted per item name in
+        // settings.item_acquisition_mode - absent means "mine" (the default
+        // expandCommodities() already assumes).
+        const mode = buyModes[name] === "buy" ? "buy" : "mine";
+        const modeSelectId = `plan-item-mode-${sourceRowIndex++}`;
+        const modeSelect = el("select", { id: modeSelectId }, [
+          el("option", { value: "mine", text: "Mine" }),
+          el("option", { value: "buy", text: "Buy" }),
         ]);
-      } else if (name in assemblyHours) {
-        const hours = assemblyHours[name];
-        const hoursText = hours !== null ? formatHours(hours) : "rate unknown";
-        row = el("div", { class: "field-row" }, [el("label", { class: "status-ok", text: `${name} (Assembly) — need ${need.toFixed(1)} — ${hoursText}` })]);
+        modeSelect.value = mode;
+        modeSelect.addEventListener("change", async () => {
+          if (modeSelect.value === "buy") buyModes[name] = "buy";
+          else delete buyModes[name];
+          await storage.saveSettings(app.settings);
+          await buildRequirements(); // the whole expansion graph can change, not just this row
+        });
+
+        if (mode === "buy") {
+          sourcesContainer.appendChild(
+            el("div", { class: "field-row" }, [
+              el("label", { for: modeSelectId, text: `${name} (assembly, need ${need.toFixed(1)}):` }),
+              modeSelect,
+            ])
+          );
+        } else {
+          const hours = assemblyHours[name];
+          const hoursText = hours != null ? formatHours(hours) : "rate unknown";
+          sourcesContainer.appendChild(
+            el("div", { class: "field-row" }, [
+              el("label", { for: modeSelectId, class: "status-ok", text: `${name} (assembly, need ${need.toFixed(1)}, ${hoursText}):` }),
+              modeSelect,
+            ])
+          );
+          // Sub-category: this item's own fully-expanded raw resource
+          // breakdown (gross recipe cost, not netted against inventory -
+          // see itemResourceBreakdown() in calc-engine.js) - purely
+          // informational attribution, doesn't change the combined Mining
+          // totals below (those still merge every "Mine" item's ore needs
+          // into one shared pool, same as always).
+          for (const sub of itemResourceBreakdown(app.catalog, name, need, app.assemblyRecipes, buyModes)) {
+            sourcesContainer.appendChild(
+              el("div", { class: "field-row source-subitem" }, [el("label", { text: `↳ ${sub.name}: ${sub.need.toFixed(1)}` })])
+            );
+          }
+        }
       } else {
-        row = el("div", { class: "field-row" }, [
-          el("label", { class: "status-warn", text: `${name} (commodity, need ${need.toFixed(1)}) — no known ore/planet/assembly source, tracked from inventory only` }),
-        ]);
+        sourcesContainer.appendChild(
+          el("div", { class: "field-row" }, [
+            el("label", { class: "status-warn", text: `${name} (commodity, need ${need.toFixed(1)}) — no known ore/planet/assembly source, tracked from inventory only` }),
+          ])
+        );
       }
-      sourcesContainer.appendChild(row);
     }
     if (!anyShown) {
       sourcesContainer.appendChild(el("div", { class: "status-ok", text: "Nothing needed beyond what's already in inventory." }));
@@ -351,7 +455,9 @@ export function initPlanTab(app, container) {
       const h = result.assemblyHours[name];
       return `Assembly (${h !== null ? h.toFixed(1) + "h" : "rate unknown"})`;
     }
-    if (name in result.unresolved) return "(no known source)";
+    if (name in result.unresolved) {
+      return (app.settings.item_acquisition_mode || {})[name] === "buy" ? "(buy)" : "(no known source)";
+    }
     return "-";
   }
 
@@ -434,7 +540,12 @@ export function initPlanTab(app, container) {
   }
 
   function updateMissingAssemblyWarning(result) {
-    const names = Object.keys(result.unresolved).filter((n) => app.catalog.classify(n)[0] === "unknown");
+    // Items the player explicitly chose "Buy" for (per-item, in Item
+    // sources) are unresolved on purpose - they show up in the Buy section
+    // instead, not as a warning here. Only warn about a Commodity that's
+    // unresolved because no Assembly recipe exists for it at all yet.
+    const buyModes = app.settings.item_acquisition_mode || {};
+    const names = Object.keys(result.unresolved).filter((n) => app.catalog.classify(n)[0] === "unknown" && buyModes[n] !== "buy");
     missingAssemblyWarning.textContent = names.length
       ? `${names.length} commodity item(s) have no known source: ${names.join(", ")}`
       : "";
@@ -451,7 +562,8 @@ export function initPlanTab(app, container) {
       return;
     }
 
-    const { expanded, assemblyHours } = expandCommodities(app.catalog, app.planBaseRequirements, app.assemblyRecipes, app.inventory);
+    const buyModes = app.settings.item_acquisition_mode || {};
+    const { expanded, assemblyHours } = expandCommodities(app.catalog, app.planBaseRequirements, app.assemblyRecipes, app.inventory, 20, buyModes);
     app.planRequirements = expanded;
 
     const oreChoices = {};
@@ -478,11 +590,12 @@ export function initPlanTab(app, container) {
   }
 
   async function computeAllBuildsRequirements() {
+    const buyModes = app.settings.item_acquisition_mode || {};
     const combined = {};
     const contributors = {}; // itemName -> Set(buildName)
     for (const [buildName, entries] of Object.entries(app.builds)) {
       const totals = entriesToTotals(app.recipes, entries);
-      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory);
+      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory, 20, buyModes);
       for (const [item, qty] of Object.entries(expanded)) {
         combined[item] = (combined[item] || 0) + qty;
         if (!contributors[item]) contributors[item] = new Set();
@@ -510,7 +623,8 @@ export function initPlanTab(app, container) {
       const ore = app.catalog.findOre(oreName);
       if (ore) oreChoices[item] = ore;
     }
-    const { assemblyHours } = expandCommodities(app.catalog, combined, app.assemblyRecipes, app.inventory);
+    const buyModes = app.settings.item_acquisition_mode || {};
+    const { assemblyHours } = expandCommodities(app.catalog, combined, app.assemblyRecipes, app.inventory, 20, buyModes);
     const result = planMining(app.catalog, combined, app.inventory, oreChoices, cargoCapacity, harvesterTotals(app.harvesterSlots), app.pendingRefining, assemblyHours);
 
     app.planRequirements = combined;
@@ -558,8 +672,8 @@ export function initPlanTab(app, container) {
     if (!selectedOreForPending) return;
     const ore = app.catalog.findOre(selectedOreForPending);
     const batches = parseInt(pendingBatchesForOreInput.value, 10);
-    if (!ore || Number.isNaN(batches)) {
-      alert("Select an ore row and enter a whole number of batches.");
+    if (!ore || Number.isNaN(batches) || batches < 0) {
+      alert("Select an ore row and enter a whole number of batches (0 or more).");
       return;
     }
     const oldBatches = app.pendingRefining[ore.name] || 0;

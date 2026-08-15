@@ -2,14 +2,18 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>To Mine</title>
+  <title>Manifest</title>
   <link rel="stylesheet" href="popup.css" />
 </head>
 <body>
   <header class="popup-header">
-    <h1>To Mine</h1>
+    <h1>Manifest</h1>
     <button id="switch-to-dashboard" title="Switch this window to the full dashboard">Dashboard →</button>
   </header>
+  <div class="view-toggle" role="group" aria-label="View">
+    <button id="view-personal" class="view-toggle-btn" type="button" aria-pressed="true">Personal Farm</button>
+    <button id="view-corp" class="view-toggle-btn" type="button" aria-pressed="false">Corp</button>
+  </div>
   <main id="ore-list" class="ore-list"></main>
   <script type="module" src="popup.js"></script>
 </body>
