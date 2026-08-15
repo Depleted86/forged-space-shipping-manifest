@@ -35,6 +35,23 @@ export function initAssemblyTab(app, container) {
   const capLevelInfo = el("div", { class: "status-text" });
   const saveStatus = el("div", { class: "status-text" });
 
+  // Shown only while there are zero Assembly recipes - a first-time player
+  // has no way to know this tab auto-populates from a live in-game screen
+  // (see content.js's checkAssemblerPlans()/background.js's
+  // handleAssemblerScrape()) rather than shipping with the data built in.
+  // Deliberately just points at the game screen rather than bundling a
+  // data snapshot with the extension - Forged Space changes weekly, and a
+  // bundled snapshot would silently go stale until someone re-scrapes
+  // anyway, so the one thing worth shipping is the instruction, not the
+  // data itself.
+  const emptyStateHint = el("div", { class: "info-banner" });
+  function refreshEmptyStateHint() {
+    emptyStateHint.textContent =
+      Object.keys(app.assemblyRecipes).length === 0
+        ? 'No Assembly recipes yet - in-game, go to Item Database → Assembler Plans, select "All Plans" first, then also select "R&D Unlocked". This tab fills in automatically from what you see there - no manual entry needed.'
+        : "";
+  }
+
   function refreshCapLevelInfo() {
     capLevelInfo.textContent = editingCaptainLevel != null ? `Captain Level required: ${editingCaptainLevel}` : "";
   }
@@ -131,6 +148,7 @@ export function initAssemblyTab(app, container) {
     await storage.saveAssemblyRecipes(app.assemblyRecipes);
     clearEditor();
     refreshOutputChoices();
+    refreshEmptyStateHint();
   }
 
   function loadIntoEditor(name) {
@@ -196,6 +214,7 @@ export function initAssemblyTab(app, container) {
     editingOutput = outputItem;
     refreshListbox();
     refreshOutputChoices();
+    refreshEmptyStateHint();
     // Inline, non-blocking - unlike the alert()s above (genuine input
     // errors worth interrupting for), a routine successful save shouldn't
     // make the player click through a dialog every single time.
@@ -205,6 +224,7 @@ export function initAssemblyTab(app, container) {
 
   listSelect.addEventListener("change", () => loadIntoEditor(listSelect.value));
 
+  container.appendChild(emptyStateHint);
   container.appendChild(
     el("div", { class: "split-layout" }, [
       el("div", { class: "side-list" }, [
@@ -237,6 +257,7 @@ export function initAssemblyTab(app, container) {
   refreshListbox();
   refreshTree();
   refreshCapLevelInfo();
+  refreshEmptyStateHint();
 
   // Also refreshes the saved-list (not the in-progress edit form) when
   // assemblyRecipes change externally - e.g. an Assembler Plans import from
@@ -244,6 +265,7 @@ export function initAssemblyTab(app, container) {
   app.refreshHooks.assembly = () => {
     refreshOutputChoices();
     refreshListbox();
+    refreshEmptyStateHint();
   };
   app.unsavedGuards.assembly = hasUnsavedChanges;
 }

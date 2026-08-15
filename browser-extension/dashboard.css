@@ -349,6 +349,25 @@ table.data-table tbody tr.selected {
   margin: 4px 0 10px 0;
 }
 
+/* A helpful tip/instruction banner, not an error - distinct from
+   .status-warn (which reads as "something's wrong") since this is just
+   pointing a first-time player at what to do next, e.g. the Assembly
+   tab's empty-state hint. Empty text collapses the element to nothing via
+   :empty rather than needing show/hide logic at every call site. */
+.info-banner {
+  background: rgba(34, 211, 238, 0.08);
+  border: 1px solid var(--cyan-dim);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.info-banner:empty {
+  display: none;
+}
+
 /* Corp tab's bulk entry grid (tab-corp.js's "Create Corp Plan") - 5
    category columns side by side, each independently scrollable so a long
    category (e.g. Commodities) doesn't stretch the whole grid's height. */
