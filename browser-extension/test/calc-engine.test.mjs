@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { Catalog } from "../js/catalog.js";
-import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyRecipe } from "../js/calc-engine.js";
+import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan } from "../js/calc-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(readFileSync(join(__dirname, "fixtures.json"), "utf8"));
@@ -104,16 +104,16 @@ test("scenario C: multi-build consolidation opportunities", () => {
 test("scenario D: assembly cascade (two-level expand_commodities) + full plan_mining pipeline", () => {
   const fx = fixtures.scenario_d_assembly_cascade;
   const catalog = new Catalog();
-  const assemblyRecipes = {};
+  const assemblyPlans = {};
   for (const [output, def] of Object.entries(fx.assembly_recipes)) {
-    const recipe = new AssemblyRecipe(output, def.rate_per_hour);
-    for (const [item, qty] of Object.entries(def.requirements)) recipe.setRequirement(item, qty);
-    assemblyRecipes[output] = recipe;
+    const plan = new AssemblyPlan(output, def.rate_per_hour);
+    for (const [item, qty] of Object.entries(def.requirements)) plan.setRequirement(item, qty);
+    assemblyPlans[output] = plan;
   }
   const inventory = new Inventory();
   inventory.other = { ...fx.inventory_other };
 
-  const { expanded, assemblyHours } = expandCommodities(catalog, fx.requirements, assemblyRecipes, inventory);
+  const { expanded, assemblyHours } = expandCommodities(catalog, fx.requirements, assemblyPlans, inventory);
   assert.deepEqual(expanded, fx.expected_expanded);
   assert.deepEqual(assemblyHours, fx.expected_assembly_hours);
 

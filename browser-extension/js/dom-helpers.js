@@ -29,7 +29,7 @@ export function clear(node) {
 }
 
 // Creates a <tr> for the "click a row to select/load it" pattern used by
-// the Recipes and Assembly tabs' requirement tables, and the Plan tab's
+// the Blueprints and Assembly tabs' requirement tables, and the Plan tab's
 // result tables (materials needed / ore to mine) - previously four
 // near-identical, mouse-only copies of the same code across three files.
 // A bare <tr> isn't natively focusable or operable by keyboard at all, so
@@ -71,7 +71,7 @@ export function selectableRow(attrs, label, cells, onSelect) {
 //
 // `getCandidates` is a function, not a plain array, so callers whose
 // candidate list changes at runtime (e.g. Assembly's output-item field,
-// which depends on current inventory + existing recipes) always get the
+// which depends on current inventory + existing blueprints) always get the
 // live list without needing to separately re-wire this on every update.
 export function enableInlineAutocomplete(input, getCandidates) {
   input.addEventListener("input", (e) => {

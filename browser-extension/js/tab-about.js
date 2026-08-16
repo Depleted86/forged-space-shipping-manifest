@@ -23,10 +23,10 @@ export function initAboutTab(app, container) {
       el("h2", { text: "About Forged Space Shipping Manifest" }),
       el("p", { text: "This extension was developed with explicit permission from Coops, the developer of Forged Space." }),
       el("p", {
-        text: "It makes no network requests of any kind and never transmits anything anywhere. The only data it stores is your own Forged Space game data (inventory, recipes, builds, and settings), saved locally in your browser and nowhere else.",
+        text: "It makes no network requests of any kind and never transmits anything anywhere. The only data it stores is your own Forged Space game data (inventory, blueprints, builds, and settings), saved locally in your browser and nowhere else.",
       }),
       el("p", {
-        text: "It is strictly read-only: it only reads what's already on the page you're looking at. It never clicks anything, fills in a form, or takes any action in the game on your behalf.",
+        text: "It is strictly read-only: it only reads what's already on the page you're looking at. It never clicks anything, fills in a form, or takes any action in the game on your behalf. The one piece of its own UI it adds to the page - the floating Manifest panel - is a separate, self-contained overlay the extension draws and controls itself; it doesn't read from, write to, or change the game's own interface in any way.",
       }),
       el("p", {}, [
         "The source code is public on ",

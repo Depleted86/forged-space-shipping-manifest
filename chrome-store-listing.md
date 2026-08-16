@@ -5,17 +5,17 @@ shipped extension - keep this out of the packaged zip.
 
 ## Short description (≤132 characters)
 
-Mining, refining, and assembly planner for Forged Space, with a live Manifest popup and corp order tracking synced to your storage.
+Mining, refining, and assembly planner for Forged Space, with an in-game Manifest overlay and corp order tracking.
 
 ## Detailed description
 
 Forged Space Shipping Manifest is a companion planner for the game Forged
 Space, developed with explicit permission from Coops, the game's developer.
 
-Track recipes, refining/assembly chains, and planetary harvesting rates,
-then build a full mining-to-launch plan. A floating "Manifest" window shows
-exactly what's left to gather, live-synced to your in-game storage - no more
-juggling a spreadsheet or a separate desktop app.
+Track blueprints, refining/assembly chains, and planetary harvesting rates,
+then build a full mining-to-launch plan. An in-game "Manifest" overlay
+shows exactly what's left to gather, live-synced to your in-game storage -
+no more juggling a spreadsheet or a separate desktop app.
 
 For corp orders, the Corp tab tracks a shared build against the corp's
 Store, with an editable "have" figure any corp-mate can correct for
@@ -25,9 +25,11 @@ spreadsheet can too.
 This extension is strictly read-only and makes no network requests of any
 kind. It only reads the storage screen you're already looking at on
 forgedspace.com - it never clicks, submits, or automates anything in the
-game on your behalf. Everything it stores (recipes, inventory, builds,
-settings) stays local to your own browser and is never transmitted
-anywhere.
+game on your behalf. Its one piece of on-page UI (the Manifest overlay) is
+a separate, self-contained element it draws and controls itself; it never
+reads from or modifies the game's own page content. Everything it stores
+(blueprints, inventory, builds, settings) stays local to your own browser and
+is never transmitted anywhere.
 
 Full source code is public so anyone can verify the above for themselves:
 https://github.com/Depleted86/forged-space-shipping-manifest
@@ -44,19 +46,20 @@ Productivity (or Tools, if Productivity isn't offered as a distinct option)
 ## Single purpose description
 
 Helps Forged Space players plan mining, refining, and assembly by tracking
-recipes and syncing a live manifest from their in-game storage.
+blueprints and syncing a live manifest from their in-game storage.
 
 ## Permission justifications
 
 **storage**
-Used to save the player's own recipes, inventory snapshots, saved builds,
-corp order data, and settings locally in the browser, so their planning
-data persists between sessions.
+Used to save the player's own blueprints, inventory snapshots, saved
+builds, corp order data, and settings locally in the browser, so their
+planning data persists between sessions.
 
 **Host permission: https://forgedspace.com/***
 Used only so the extension's content script can read the storage/inventory
-listing on forgedspace.com to keep the extension's local tracking in sync.
-It never submits or modifies anything on the page.
+listing on forgedspace.com to keep the extension's local tracking in sync,
+and to render its own separate in-page Manifest overlay. It never submits
+or modifies anything on the page itself.
 
 ## Privacy policy URL
 

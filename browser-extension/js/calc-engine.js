@@ -1,6 +1,10 @@
 // Planning engine - JS port of models.py's Recipe/AssemblyRecipe/Inventory/
 // PlanResult classes and its expand_commodities/find_consolidation_opportunities/
-// harvester_totals/pending_refining_output/plan_mining functions.
+// harvester_totals/pending_refining_output/plan_mining functions. Recipe and
+// AssemblyRecipe are named Blueprint and AssemblyPlan here - renamed on
+// 2026-08-15 to match the game's own terminology - but the Python names are
+// left as-is above since that app is deleted and this comment is now purely
+// historical lineage.
 //
 // Preserves exact semantics of the Python original, verified against
 // golden-master fixtures captured from the live Python app (see test/).
@@ -11,7 +15,7 @@
 // consumed directly/unrefined (e.g. "Thracium"), or a resource outside the
 // ore catalog entirely (e.g. an uncatalogued planetary resource) - the
 // planner classifies each name at plan time via Catalog.classify().
-export class Recipe {
+export class Blueprint {
   constructor(name) {
     this.name = name;
     this.requirements = {}; // { itemName: qtyPerUnit }
@@ -46,13 +50,13 @@ export class Recipe {
 // resource cost, not per-batch). Keyed by the commodity name it produces, so
 // the planner can look it up automatically whenever that commodity shows up
 // as a need.
-export class AssemblyRecipe {
+export class AssemblyPlan {
   constructor(outputItem, ratePerHour) {
     this.outputItem = outputItem;
     this.ratePerHour = ratePerHour;
     this.requirements = {}; // { itemName: qtyPerUnitOfOutput }
-    // See Recipe.captainLevel above - same informational-only stat, not used
-    // by any calculation.
+    // See Blueprint.captainLevel above - same informational-only stat, not
+    // used by any calculation.
     this.captainLevel = null;
   }
 
@@ -130,18 +134,18 @@ export class PlanResult {
   }
 }
 
-// Cascades Commodity (unknown-kind) needs through their AssemblyRecipe,
+// Cascades Commodity (unknown-kind) needs through their AssemblyPlan,
 // merging the per-unit input cost (scaled by however many units are still
 // needed) into the requirements pool, repeating until no further expansion
 // happens (inputs can themselves be commodities needing their own assembly)
-// or maxPasses is hit (guards against a circular recipe chain rather than
+// or maxPasses is hit (guards against a circular plan chain rather than
 // hanging).
 //
 // buyModes is an optional { itemName: "buy" } map (per-item, from
 // settings.item_acquisition_mode - "mine" is the implicit default for any
 // name absent from it) - an item marked "buy" is deliberately NOT cascaded
-// into its own ingredient requirements, the same as one with no recipe at
-// all: it stays a flat named quantity in `expanded` (and out of
+// into its own ingredient requirements, the same as one with no Assembly
+// Plan at all: it stays a flat named quantity in `expanded` (and out of
 // `assemblyHours`), for the player to go acquire directly rather than
 // build. This is checked fresh for every name encountered on every pass, so
 // a Commodity that only surfaces as a NESTED ingredient of some other
@@ -150,11 +154,11 @@ export class PlanResult {
 //
 // Returns { expanded, assemblyHours } where assemblyHours is
 // { commodityName: hours|null } for every commodity that got expanded (null
-// if its recipe has no known rate yet) - used by the planner to mark it
-// "resolved via Assembly" instead of unresolved, and by the UI to show an
+// if its Assembly Plan has no known rate yet) - used by the planner to mark
+// it "resolved via Assembly" instead of unresolved, and by the UI to show an
 // hours-to-produce estimate against that item.
-export function expandCommodities(catalog, requirements, assemblyRecipes, inventory, maxPasses = 20, buyModes = null) {
-  assemblyRecipes = assemblyRecipes || {};
+export function expandCommodities(catalog, requirements, assemblyPlans, inventory, maxPasses = 20, buyModes = null) {
+  assemblyPlans = assemblyPlans || {};
   buyModes = buyModes || {};
   const expanded = { ...requirements };
   const assemblyHours = {};
@@ -166,16 +170,16 @@ export function expandCommodities(catalog, requirements, assemblyRecipes, invent
       const [kind] = catalog.classify(name);
       if (kind !== "unknown") continue;
       if (buyModes[name] === "buy") continue;
-      const recipe = assemblyRecipes[name];
-      if (!recipe) continue;
+      const plan = assemblyPlans[name];
+      if (!plan) continue;
       const have = inventory.other[name] || 0;
       const need = Math.max(0.0, expanded[name] - have);
       const prevNeed = alreadyExpandedNeed[name] || 0.0;
       if (need <= prevNeed) continue;
       const delta = need - prevNeed;
       alreadyExpandedNeed[name] = need;
-      assemblyHours[name] = recipe.ratePerHour > 0 ? need / recipe.ratePerHour : null;
-      for (const [inputName, qtyPerUnit] of Object.entries(recipe.requirements)) {
+      assemblyHours[name] = plan.ratePerHour > 0 ? need / plan.ratePerHour : null;
+      for (const [inputName, qtyPerUnit] of Object.entries(plan.requirements)) {
         expanded[inputName] = (expanded[inputName] || 0.0) + qtyPerUnit * delta;
       }
       expandedAny = true;
@@ -381,20 +385,26 @@ export function planMining(catalog, requirements, inventory, oreChoices, cargoCa
   return result;
 }
 
-// Scales a Recipe's per-unit requirements by qty, or adds a flat ad-hoc
+// Scales a Blueprint's per-unit requirements by qty, or adds a flat ad-hoc
 // material qty directly. Port of gui.py's _entries_to_totals. Lives here
 // (rather than in tab-plan.js, its only caller until 2026-08-09) so it can
 // also be imported by background.js's headless plan recalculation without
 // pulling any DOM-touching UI module into the service worker context -
-// this function only ever touches the plain `recipes` map passed in, never
-// the DOM.
-export function entriesToTotals(recipes, entries) {
+// this function only ever touches the plain `blueprints` map passed in,
+// never the DOM.
+//
+// Entry kind is "blueprint" for anything saved going forward, but a build
+// saved before the 2026-08-15 Recipe->Blueprint rename may still have
+// entries tagged the old way ("recipe") - both are accepted here
+// indefinitely so old saved builds keep working without needing a one-time
+// rewrite.
+export function entriesToTotals(blueprints, entries) {
   const totals = {};
   for (const [kind, name, qty] of entries) {
-    if (kind === "recipe") {
-      const recipe = recipes[name];
-      if (!recipe) continue;
-      for (const [item, itemQty] of Object.entries(recipe.scaled(qty))) {
+    if (kind === "blueprint" || kind === "recipe") {
+      const blueprint = blueprints[name];
+      if (!blueprint) continue;
+      for (const [item, itemQty] of Object.entries(blueprint.scaled(qty))) {
         totals[item] = (totals[item] || 0) + itemQty;
       }
     } else {
@@ -407,42 +417,43 @@ export function entriesToTotals(recipes, entries) {
 // A standalone, fully-expanded raw-resource breakdown for ONE Assembly item
 // on its own - e.g. "Industrial Ioniser" cascaded all the way down to the
 // ore/material/nested-Commodity totals it takes to build `need` more units,
-// for the Item sources sub-category display (see tab-plan.js). Pure recipe
-// multiplication all the way down (NOT netted against inventory at each
-// step, unlike expandCommodities()) - `need` is already the outstanding
-// amount of the item itself (netted once, by the caller), and this exists
-// purely to show what building that many actually costs, in full - netting
-// each intermediate ingredient against inventory too would just hide rows
-// the player still needs to go mine whenever they happen to already have
-// SOME (but not all) of an intermediate ingredient in stock, which is the
-// opposite of "list everything that needs to be mined." Deliberately
-// independent of the rest of the plan's own totals - this is informational
-// attribution for ONE item, not a second pool: the real combined Mining/
-// Ore-to-Mine totals (planMining() on the whole plan's merged requirements)
-// remain the single source of truth for what to actually go mine and how
-// many trips that takes. buyModes is threaded through so a nested
-// ingredient the player separately chose "buy" for stops cascading here
-// too, matching expandCommodities() itself - it shows up as its own flat
-// leaf line instead of being expanded further. A qty-carrying recursive
-// walk (not expandCommodities' pass-based loop) so diamond-shaped recipes -
-// two different ingredients both needing the same base ore - correctly sum
-// instead of only counting the first occurrence; maxDepth guards a circular
-// recipe chain the same way expandCommodities' maxPasses does.
-export function itemResourceBreakdown(catalog, itemName, need, assemblyRecipes, buyModes, maxDepth = 20) {
-  const recipe = (assemblyRecipes || {})[itemName];
-  if (!recipe || need <= 0) return [];
+// for the Item sources sub-category display (see tab-plan.js). Pure
+// Assembly Plan multiplication all the way down (NOT netted against
+// inventory at each step, unlike expandCommodities()) - `need` is already
+// the outstanding amount of the item itself (netted once, by the caller),
+// and this exists purely to show what building that many actually costs, in
+// full - netting each intermediate ingredient against inventory too would
+// just hide rows the player still needs to go mine whenever they happen to
+// already have SOME (but not all) of an intermediate ingredient in stock,
+// which is the opposite of "list everything that needs to be mined."
+// Deliberately independent of the rest of the plan's own totals - this is
+// informational attribution for ONE item, not a second pool: the real
+// combined Mining/Ore-to-Mine totals (planMining() on the whole plan's
+// merged requirements) remain the single source of truth for what to
+// actually go mine and how many trips that takes. buyModes is threaded
+// through so a nested ingredient the player separately chose "buy" for
+// stops cascading here too, matching expandCommodities() itself - it shows
+// up as its own flat leaf line instead of being expanded further. A
+// qty-carrying recursive walk (not expandCommodities' pass-based loop) so
+// diamond-shaped Assembly Plans - two different ingredients both needing
+// the same base ore - correctly sum instead of only counting the first
+// occurrence; maxDepth guards a circular plan chain the same way
+// expandCommodities' maxPasses does.
+export function itemResourceBreakdown(catalog, itemName, need, assemblyPlans, buyModes, maxDepth = 20) {
+  const plan = (assemblyPlans || {})[itemName];
+  if (!plan || need <= 0) return [];
   buyModes = buyModes || {};
   const totals = {};
   const walk = (name, qty, depth) => {
     const [kind] = catalog.classify(name);
-    const nestedRecipe = kind === "unknown" && buyModes[name] !== "buy" ? assemblyRecipes[name] : null;
-    if (nestedRecipe && depth < maxDepth) {
-      for (const [inputName, qtyPerUnit] of Object.entries(nestedRecipe.requirements)) walk(inputName, qtyPerUnit * qty, depth + 1);
+    const nestedPlan = kind === "unknown" && buyModes[name] !== "buy" ? assemblyPlans[name] : null;
+    if (nestedPlan && depth < maxDepth) {
+      for (const [inputName, qtyPerUnit] of Object.entries(nestedPlan.requirements)) walk(inputName, qtyPerUnit * qty, depth + 1);
       return;
     }
     totals[name] = (totals[name] || 0) + qty;
   };
-  for (const [inputName, qtyPerUnit] of Object.entries(recipe.requirements)) walk(inputName, qtyPerUnit * need, 1);
+  for (const [inputName, qtyPerUnit] of Object.entries(plan.requirements)) walk(inputName, qtyPerUnit * need, 1);
 
   const rows = Object.entries(totals).map(([name, qty]) => {
     const [kind] = catalog.classify(name);
@@ -452,10 +463,11 @@ export function itemResourceBreakdown(catalog, itemName, need, assemblyRecipes, 
   return rows;
 }
 
-// PlanResult (Ore/Material Map keys) -> the plain JSON shape the floating
-// Manifest window (popup.js) expects, matching the old bridge_server.py's
-// build_payload exactly (plus `assembly`, added later). Moved here alongside
-// entriesToTotals for the same DOM-free-importability reason.
+// PlanResult (Ore/Material Map keys) -> the plain JSON shape the in-page
+// Manifest overlay (js/overlay-manifest.js) expects, matching the old
+// bridge_server.py's build_payload exactly (plus `assembly`, added later).
+// Moved here alongside entriesToTotals for the same DOM-free-importability
+// reason.
 export function toStorableToMineData(result, cargoCapacity) {
   if (!result) return { available: false, ores: [], refined: [], assembly: [], planetary: [], buy: [] };
   // Mining/ores is the TOTAL raw ore still needed - direct use AND
@@ -467,15 +479,15 @@ export function toStorableToMineData(result, cargoCapacity) {
   // direct use is covered by stock they're about to consume via a refining
   // batch. Refined's raw_needed below is a BREAKDOWN of how much of this
   // same total is attributable to refining, not an additional amount on
-  // top of it - see renderRefinedGroups()'s wording in popup.js.
+  // top of it - see renderRefinedGroups()'s wording in js/overlay-manifest.js.
   const ores = [];
   for (const [ore, toMine] of result.oreToMine.entries()) {
     if (toMine <= 0) continue;
     const trips = cargoCapacity > 0 ? Math.ceil(toMine / cargoCapacity) : 0;
     // How much of to_mine is attributable to refining - a BREAKDOWN, not an
     // additional amount on top of to_mine. Shown inline on the row itself
-    // (see renderPersonalRow() in popup.js) so the connection to the
-    // "Refined" section below is obvious at a glance.
+    // (see renderPersonalRow() in js/overlay-manifest.js) so the connection
+    // to the "Refined" section below is obvious at a glance.
     const refinedPortion = result.oreTargetRefined.has(ore) ? ore.rawNeededFor(result.oreTargetRefined.get(ore)) : 0;
     ores.push({
       name: ore.name,
@@ -569,7 +581,7 @@ export function toStorableToMineData(result, cargoCapacity) {
   planetary.sort((a, b) => b.need - a.need);
 
   // Commodity-kind items left unresolved on purpose - either no known
-  // Assembly recipe exists at all, or the player explicitly chose "Buy" for
+  // Assembly Plan exists at all, or the player explicitly chose "Buy" for
   // that specific item in Item sources (see expandCommodities()'s buyModes
   // param) - either way, `assembly` above only contains items that WERE
   // cascaded, so result.unresolved's kind:"unknown" entries are exactly the
@@ -620,7 +632,7 @@ export function toStorableToMineData(result, cargoCapacity) {
 // that item entirely - it's presumed more authoritative than what this
 // player can otherwise see. Items absent from this dict fall back to the
 // live corpInventory balance unaffected.
-export function toStorableCorpData(catalog, assemblyRecipes, oreChoices, totals, corpInventory, cargoCapacity, haveOverrides) {
+export function toStorableCorpData(catalog, assemblyPlans, oreChoices, totals, corpInventory, cargoCapacity, haveOverrides) {
   const items = [];
   // Refined materials are pulled out of the flat items list into their own
   // ore-sourced grouping, same reasoning as toStorableToMineData()'s
@@ -661,7 +673,7 @@ export function toStorableCorpData(catalog, assemblyRecipes, oreChoices, totals,
     // 4 remaining top-level categories, same split as the Corp tab's
     // "Create Corp Plan" bulk-entry grid (tab-corp.js): Ore, Assembly,
     // Planetary, Commodities. Anything truly unclassifiable (a named
-    // commodity with no Assembly recipe) falls into "commodity" rather
+    // commodity with no Assembly Plan) falls into "commodity" rather
     // than being silently dropped.
     let category;
     let law = null;
@@ -672,7 +684,7 @@ export function toStorableCorpData(catalog, assemblyRecipes, oreChoices, totals,
     } else if (kind === "planet_resource") {
       category = "planetary";
       planets = obj.planetTypes.map((pt) => pt.name);
-    } else if (assemblyRecipes && assemblyRecipes[name]) {
+    } else if (assemblyPlans && assemblyPlans[name]) {
       category = "assembly";
     } else {
       category = "commodity";

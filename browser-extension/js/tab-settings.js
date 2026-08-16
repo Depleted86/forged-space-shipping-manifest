@@ -54,18 +54,26 @@ export function initSettingsTab(app, container) {
   // automatically the moment the relevant tab loads, so backing them up
   // would only ever restore something instantly stale.
   const BACKUP_KEYS = [
-    "recipes",
+    "blueprints",
     "inventory",
     "settings",
     "harvesters",
     "pendingRefining",
-    "assemblyRecipes",
+    "assemblyPlans",
     "builds",
     "activeBuildName",
     "corpInventory",
     "activeCorpBuildName",
     "corpHaveOverrides",
   ];
+
+  // Old key names, from before the 2026-08-15 Recipe/AssemblyRecipe ->
+  // Blueprint/AssemblyPlan rename - accepted on Import only (never Export),
+  // so a backup taken with an older version still restores correctly. This
+  // writes straight to browser.storage.local, bypassing storage.js's own
+  // loadBlueprints()/loadAssemblyPlans() migration entirely, so it needs
+  // this same fallback of its own.
+  const LEGACY_IMPORT_KEY_MAP = { recipes: "blueprints", assemblyRecipes: "assemblyPlans" };
 
   const exportTextarea = el("textarea", { rows: "6", style: "width:100%;font-family:monospace;font-size:12px", placeholder: "Click Export to fill this in..." });
   const exportStatus = el("div", { class: "status-text" });
@@ -92,6 +100,9 @@ export function initSettingsTab(app, container) {
     for (const key of BACKUP_KEYS) {
       if (key in blob) toWrite[key] = blob[key];
     }
+    for (const [oldKey, newKey] of Object.entries(LEGACY_IMPORT_KEY_MAP)) {
+      if (oldKey in blob && !(newKey in toWrite)) toWrite[newKey] = blob[oldKey];
+    }
     if (Object.keys(toWrite).length === 0) {
       alert(`No recognized keys found in that JSON (expected ${BACKUP_KEYS.join("/")}).`);
       return;
@@ -110,7 +121,7 @@ export function initSettingsTab(app, container) {
       el("div", { class: "toolbar" }, [el("button", { text: "Save", onclick: save })]),
       statusText,
       el("h3", { class: "section-title", text: "Backup & restore" }),
-      el("div", { class: "hint", text: "Export everything (recipes, inventory, settings, builds, etc.) as JSON, or paste a previous export back in to restore it." }),
+      el("div", { class: "hint", text: "Export everything (blueprints, inventory, settings, builds, etc.) as JSON, or paste a previous export back in to restore it." }),
       el("div", { class: "toolbar" }, [el("button", { text: "Export Current Data", onclick: runExport })]),
       exportTextarea,
       exportStatus,

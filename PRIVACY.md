@@ -1,6 +1,6 @@
 # Privacy Policy — Forged Space Shipping Manifest
 
-_Last updated: 2026-08-09_
+_Last updated: 2026-08-15_
 
 Forged Space Shipping Manifest is a browser extension for the game
 [Forged Space](https://forgedspace.com), developed with explicit
@@ -21,9 +21,13 @@ it does happens locally, inside your own browser.
   storage inventory listing — to keep its own local ore/inventory
   tracking in sync with what's actually in your in-game storage. It does
   not read any other part of the page, and it never interacts with the
-  page beyond reading it: it does not click anything, fill in a form, or
-  take any action in the game on your behalf.
-- **Your own extension data**: recipes, inventory snapshots, saved
+  game's own interface: it does not click anything, fill in a form, or
+  take any action in the game on your behalf. It does add one piece of its
+  own UI directly onto the page - a small floating "Manifest" overlay
+  showing your synced data - but that's a separate, self-contained element
+  the extension draws and controls itself; it doesn't read from, write to,
+  or change the game's own page content in any way.
+- **Your own extension data**: blueprints, inventory snapshots, saved
   builds, and settings that you enter into the extension yourself.
 
 ## What the extension does NOT do

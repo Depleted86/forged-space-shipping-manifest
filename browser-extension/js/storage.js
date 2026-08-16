@@ -12,10 +12,11 @@
 //
 // One new key with no Python analog: `toMineData`, holding the last computed
 // plan result. In Python this only ever lived in-memory
-// (app.last_plan_result); here it must be persisted since the toolbar
-// popup (popup.js) reads it independently of whichever context computed it.
+// (app.last_plan_result); here it must be persisted since the in-page
+// Manifest overlay (js/overlay-manifest.js) reads it independently of
+// whichever context computed it.
 
-import { Recipe, AssemblyRecipe, Inventory } from "./calc-engine.js";
+import { Blueprint, AssemblyPlan, Inventory } from "./calc-engine.js";
 
 export const DEFAULT_SETTINGS = {
   cargo_capacity: 600,
@@ -34,12 +35,12 @@ export const DEFAULT_SETTINGS = {
 };
 
 const KEYS = {
-  recipes: "recipes",
+  blueprints: "blueprints",
   inventory: "inventory",
   settings: "settings",
   harvesters: "harvesters",
   pendingRefining: "pendingRefining",
-  assemblyRecipes: "assemblyRecipes",
+  assemblyPlans: "assemblyPlans",
   builds: "builds",
   toMineData: "toMineData",
   inventorySyncMeta: "inventorySyncMeta",
@@ -48,6 +49,16 @@ const KEYS = {
   corpToMineData: "corpToMineData",
   activeCorpBuildName: "activeCorpBuildName",
   corpHaveOverrides: "corpHaveOverrides",
+};
+
+// Pre-2026-08-15 key names, from before Recipe/AssemblyRecipe were renamed
+// to Blueprint/AssemblyPlan (to match the game's own terminology). Read as a
+// one-time fallback in loadBlueprints()/loadAssemblyPlans() below so nobody
+// upgrading from an older version loses what they'd already saved - never
+// written to again once migrated forward onto the new key.
+const LEGACY_KEYS = {
+  blueprints: "recipes",
+  assemblyPlans: "assemblyRecipes",
 };
 
 async function getKey(key, fallback) {
@@ -60,29 +71,37 @@ async function setKey(key, value) {
 }
 
 // Storage shape changed from a bare { itemName: qty } requirements dict per
-// recipe to a wrapper { requirements: {...}, captain_level } once recipes
-// gained a captainLevel stat - `entry.requirements` (truthy only on the new
-// shape, since no real item is ever literally named "requirements") tells
-// the two apart, so recipes saved before this change still load correctly.
-export async function loadRecipes() {
-  const raw = await getKey(KEYS.recipes, {});
-  const recipes = {};
-  for (const [name, entry] of Object.entries(raw)) {
-    const recipe = new Recipe(name);
-    const reqs = entry && entry.requirements ? entry.requirements : entry;
-    for (const [itemName, qty] of Object.entries(reqs || {})) recipe.setRequirement(itemName, qty);
-    recipe.captainLevel = entry && entry.captain_level != null ? entry.captain_level : null;
-    recipes[name] = recipe;
+// blueprint to a wrapper { requirements: {...}, captain_level } once
+// blueprints gained a captainLevel stat - `entry.requirements` (truthy only
+// on the new shape, since no real item is ever literally named
+// "requirements") tells the two apart, so blueprints saved before that
+// change still load correctly.
+export async function loadBlueprints() {
+  let raw = await getKey(KEYS.blueprints, null);
+  if (raw === null) {
+    // First load since the rename (see LEGACY_KEYS above) - fall back to
+    // whatever was saved under the old "recipes" key, then persist it
+    // forward under the new key so this only ever runs once.
+    raw = await getKey(LEGACY_KEYS.blueprints, {});
+    if (Object.keys(raw).length > 0) await setKey(KEYS.blueprints, raw);
   }
-  return recipes;
+  const blueprints = {};
+  for (const [name, entry] of Object.entries(raw)) {
+    const blueprint = new Blueprint(name);
+    const reqs = entry && entry.requirements ? entry.requirements : entry;
+    for (const [itemName, qty] of Object.entries(reqs || {})) blueprint.setRequirement(itemName, qty);
+    blueprint.captainLevel = entry && entry.captain_level != null ? entry.captain_level : null;
+    blueprints[name] = blueprint;
+  }
+  return blueprints;
 }
 
-export async function saveRecipes(recipes) {
+export async function saveBlueprints(blueprints) {
   const raw = {};
-  for (const [name, recipe] of Object.entries(recipes)) {
-    raw[name] = { requirements: { ...recipe.requirements }, captain_level: recipe.captainLevel ?? null };
+  for (const [name, blueprint] of Object.entries(blueprints)) {
+    raw[name] = { requirements: { ...blueprint.requirements }, captain_level: blueprint.captainLevel ?? null };
   }
-  await setKey(KEYS.recipes, raw);
+  await setKey(KEYS.blueprints, raw);
 }
 
 export async function loadInventory(catalog) {
@@ -131,26 +150,32 @@ export async function savePendingRefining(pending) {
   await setKey(KEYS.pendingRefining, pending);
 }
 
-// { commodityName: AssemblyRecipe } - how each Commodity is produced at the
+// { commodityName: AssemblyPlan } - how each Commodity is produced at the
 // Assembly.
-export async function loadAssemblyRecipes() {
-  const raw = await getKey(KEYS.assemblyRecipes, {});
-  const assemblyRecipes = {};
-  for (const [outputItem, entry] of Object.entries(raw)) {
-    const recipe = new AssemblyRecipe(outputItem, entry.rate_per_hour ?? 1);
-    for (const [itemName, qty] of Object.entries(entry.requirements || {})) recipe.setRequirement(itemName, qty);
-    recipe.captainLevel = entry.captain_level != null ? entry.captain_level : null;
-    assemblyRecipes[outputItem] = recipe;
+export async function loadAssemblyPlans() {
+  let raw = await getKey(KEYS.assemblyPlans, null);
+  if (raw === null) {
+    // Same one-time fallback as loadBlueprints() above, for the old
+    // "assemblyRecipes" key.
+    raw = await getKey(LEGACY_KEYS.assemblyPlans, {});
+    if (Object.keys(raw).length > 0) await setKey(KEYS.assemblyPlans, raw);
   }
-  return assemblyRecipes;
+  const assemblyPlans = {};
+  for (const [outputItem, entry] of Object.entries(raw)) {
+    const plan = new AssemblyPlan(outputItem, entry.rate_per_hour ?? 1);
+    for (const [itemName, qty] of Object.entries(entry.requirements || {})) plan.setRequirement(itemName, qty);
+    plan.captainLevel = entry.captain_level != null ? entry.captain_level : null;
+    assemblyPlans[outputItem] = plan;
+  }
+  return assemblyPlans;
 }
 
-export async function saveAssemblyRecipes(assemblyRecipes) {
+export async function saveAssemblyPlans(assemblyPlans) {
   const raw = {};
-  for (const [outputItem, recipe] of Object.entries(assemblyRecipes)) {
-    raw[outputItem] = { rate_per_hour: recipe.ratePerHour, requirements: { ...recipe.requirements }, captain_level: recipe.captainLevel ?? null };
+  for (const [outputItem, plan] of Object.entries(assemblyPlans)) {
+    raw[outputItem] = { rate_per_hour: plan.ratePerHour, requirements: { ...plan.requirements }, captain_level: plan.captainLevel ?? null };
   }
-  await setKey(KEYS.assemblyRecipes, raw);
+  await setKey(KEYS.assemblyPlans, raw);
 }
 
 // { buildName: [[kind, itemName, qty], ...] } - saved "Plan a Build" entry
@@ -175,8 +200,8 @@ export async function saveSettings(settings) {
 
 // The last computed plan result, in the same shape planMining() returns
 // (with Ore/Material Map keys flattened to name strings for storage - see
-// tab-plan.js's toStorableToMineData()). Consumed by the toolbar popup
-// (popup.js).
+// tab-plan.js's toStorableToMineData()). Consumed by the in-page Manifest
+// overlay (js/overlay-manifest.js).
 export async function loadToMineData() {
   return getKey(KEYS.toMineData, { available: false });
 }
@@ -226,8 +251,8 @@ export async function saveCorpInventory(corpInventory) {
 }
 
 // The last computed corp-store need/have comparison for the active build, in
-// the shape toStorableCorpData() returns. Consumed by the toolbar popup's
-// Corp view (popup.js).
+// the shape toStorableCorpData() returns. Consumed by the in-page Manifest
+// overlay's Corp view (js/overlay-manifest.js).
 export async function loadCorpToMineData() {
   return getKey(KEYS.corpToMineData, { available: false, items: [] });
 }

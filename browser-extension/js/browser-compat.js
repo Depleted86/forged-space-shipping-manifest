@@ -5,8 +5,11 @@
 // object) which breaks under ES module strict-mode semantics (`this` is
 // undefined in a module's top-level scope), so it can't be cleanly
 // `import`-ed into this project's module-based contexts (the MV3 service
-// worker, popup.js, dashboard.js). Content scripts avoid that problem by
-// loading this as a classic (non-module) script instead - see manifest.json.
+// worker, dashboard.js, and - via dynamic import() - overlay-manifest.js/
+// overlay-blueprint-modal.js). content.js itself is a classic (non-module)
+// content script - see its own header comment for why - so this file loads
+// there the older way too: its own separate entry in manifest.json's
+// content_scripts "js" array, listed before content.js.
 //
 // Firefox exposes a native, promise-based `browser` global; Chrome/Edge
 // only expose `chrome`, historically callback-based. Since MV3 already

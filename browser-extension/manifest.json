@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Forged Space Shipping Manifest",
   "version": "3.1",
-  "description": "Mining/refining/harvesting/assembly planner for Forged Space, with a live Manifest popup, corp-order tracking, and inventory sync built into the extension - no separate desktop app required.",
+  "description": "Mining/refining/harvesting/assembly planner for Forged Space, with a live in-game Manifest overlay, corp-order tracking, and inventory sync built into the extension - no separate desktop app required.",
   "permissions": [
     "storage"
   ],
@@ -19,6 +19,21 @@
       "matches": ["https://forgedspace.com/*"],
       "js": ["js/browser-compat.js", "content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "js/overlay-manifest.js",
+        "js/overlay-blueprint-modal.js",
+        "js/dom-helpers.js",
+        "js/catalog.js",
+        "js/calc-engine.js",
+        "js/storage.js",
+        "js/ores-data.js",
+        "js/planets-data.js"
+      ],
+      "matches": ["https://forgedspace.com/*"]
     }
   ],
   "action": {

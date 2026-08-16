@@ -1,9 +1,9 @@
-// Assembly tab - CRUD editor for AssemblyRecipe objects (continuous
-// production rate + per-unit input costs). Near-mirror of tab-recipes.js
+// Assembly tab - CRUD editor for AssemblyPlan objects (continuous
+// production rate + per-unit input costs). Near-mirror of tab-blueprints.js
 // with an added rate_per_hour field, per gui.py's _build_assembly_tab.
 
 import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
-import { AssemblyRecipe } from "./calc-engine.js";
+import { AssemblyPlan } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
 export function initAssemblyTab(app, container) {
@@ -14,28 +14,28 @@ export function initAssemblyTab(app, container) {
   // handleAssemblerScrape()), never used to gate anything here.
   let editingCaptainLevel = null;
 
-  const listSelectLabel = el("label", { for: "assembly-list", class: "visually-hidden", text: "Saved Assembly recipes" });
+  const listSelectLabel = el("label", { for: "assembly-list", class: "visually-hidden", text: "Saved Assembly Plans" });
   const listSelect = el("select", { id: "assembly-list", size: "20", class: "list-select" });
   const outputDatalistId = "assembly-output-datalist";
   const outputDatalist = el("datalist", { id: outputDatalistId });
   // width:auto (overriding the global .field-row label 200px) + flex:1 on
-  // the input, same treatment as Recipes' "Recipe name:" - so these two
-  // field-rows sit as close to their labels as "Item:"/"Qty per unit:" do
-  // below, and outputInput stretches out to the same right edge as the
+  // the input, same treatment as Blueprints' "Blueprint name:" - so these
+  // two field-rows sit as close to their labels as "Item:"/"Qty per unit:"
+  // do below, and outputInput stretches out to the same right edge as the
   // Add / Update button. rateInput stays a small fixed width like
   // inputQtyInput does - it's a short number, not a name field.
   const outputLabel = el("label", { for: "assembly-output-input", text: "Output item:", style: "width: auto; white-space: nowrap;" });
   const outputInput = el("input", { id: "assembly-output-input", type: "text", list: outputDatalistId, placeholder: "Output item (Commodity name)", style: "flex: 1; min-width: 0;" });
   // Same candidate set refreshOutputChoices() populates the datalist with -
   // kept as a live callback (not a snapshot array) so it reflects whatever
-  // is currently in inventory/assemblyRecipes at the moment the user types.
-  enableInlineAutocomplete(outputInput, () => [...new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyRecipes)])]);
+  // is currently in inventory/assemblyPlans at the moment the user types.
+  enableInlineAutocomplete(outputInput, () => [...new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyPlans)])]);
   const rateLabel = el("label", { for: "assembly-rate-input", text: "Rate (units/hour):", style: "width: auto; white-space: nowrap;" });
   const rateInput = el("input", { id: "assembly-rate-input", type: "text", value: "1", style: "width:90px" });
   const capLevelInfo = el("div", { class: "status-text" });
   const saveStatus = el("div", { class: "status-text" });
 
-  // Shown only while there are zero Assembly recipes - a first-time player
+  // Shown only while there are zero Assembly Plans - a first-time player
   // has no way to know this tab auto-populates from a live in-game screen
   // (see content.js's checkAssemblerPlans()/background.js's
   // handleAssemblerScrape()) rather than shipping with the data built in.
@@ -47,8 +47,8 @@ export function initAssemblyTab(app, container) {
   const emptyStateHint = el("div", { class: "info-banner" });
   function refreshEmptyStateHint() {
     emptyStateHint.textContent =
-      Object.keys(app.assemblyRecipes).length === 0
-        ? 'No Assembly recipes yet - in-game, go to Item Database → Assembler Plans, select "All Plans" first, then also select "R&D Unlocked". This tab fills in automatically from what you see there - no manual entry needed.'
+      Object.keys(app.assemblyPlans).length === 0
+        ? 'No Assembly Plans yet - in-game, go to Item Database → Assembler Plans, select "All Plans" first, then also select "R&D Unlocked". This tab fills in automatically from what you see there - no manual entry needed.'
         : "";
   }
 
@@ -56,11 +56,11 @@ export function initAssemblyTab(app, container) {
     capLevelInfo.textContent = editingCaptainLevel != null ? `Captain Level required: ${editingCaptainLevel}` : "";
   }
 
-  // An Assembly recipe's own inputs can include another Assembly-produced
+  // An Assembly Plan's own inputs can include another Assembly-produced
   // part, not just raw/refined catalog items - so that name needs to be
-  // pickable here too, same reasoning as tab-recipes.js's "Item:" field.
+  // pickable here too, same reasoning as tab-blueprints.js's "Item:" field.
   function inputItemCandidates() {
-    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyRecipes)])];
+    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyPlans)])];
   }
   const inputDatalistId = "assembly-input-datalist";
   const inputDatalist = el("datalist", { id: inputDatalistId }, inputItemCandidates().map((n) => el("option", { value: n })));
@@ -78,12 +78,12 @@ export function initAssemblyTab(app, container) {
 
   function refreshOutputChoices() {
     clear(outputDatalist);
-    const names = new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyRecipes)]);
+    const names = new Set([...Object.keys(app.inventory.other), ...Object.keys(app.assemblyPlans)]);
     for (const n of [...names].sort()) outputDatalist.appendChild(el("option", { value: n }));
   }
 
   function savedFor(name) {
-    return name && app.assemblyRecipes[name] ? { rate: app.assemblyRecipes[name].ratePerHour, req: app.assemblyRecipes[name].requirements } : { rate: null, req: {} };
+    return name && app.assemblyPlans[name] ? { rate: app.assemblyPlans[name].ratePerHour, req: app.assemblyPlans[name].requirements } : { rate: null, req: {} };
   }
 
   function hasUnsavedChanges() {
@@ -95,12 +95,12 @@ export function initAssemblyTab(app, container) {
 
   function confirmDiscard() {
     if (!hasUnsavedChanges()) return true;
-    return confirm("Discard unsaved changes to this Assembly recipe?");
+    return confirm("Discard unsaved changes to this Assembly Plan?");
   }
 
   function refreshListbox() {
     clear(listSelect);
-    for (const name of Object.keys(app.assemblyRecipes).sort()) {
+    for (const name of Object.keys(app.assemblyPlans).sort()) {
       listSelect.appendChild(el("option", { value: name, text: name, selected: name === editingOutput ? "" : undefined }));
     }
     listSelect.value = editingOutput || "";
@@ -136,16 +136,16 @@ export function initAssemblyTab(app, container) {
     refreshCapLevelInfo();
   }
 
-  function newRecipe() {
+  function newPlan() {
     if (!confirmDiscard()) return;
     clearEditor();
   }
 
-  async function deleteRecipe() {
+  async function deletePlan() {
     if (!editingOutput) return;
-    if (!confirm(`Delete Assembly recipe for "${editingOutput}"?`)) return;
-    delete app.assemblyRecipes[editingOutput];
-    await storage.saveAssemblyRecipes(app.assemblyRecipes);
+    if (!confirm(`Delete Assembly Plan for "${editingOutput}"?`)) return;
+    delete app.assemblyPlans[editingOutput];
+    await storage.saveAssemblyPlans(app.assemblyPlans);
     clearEditor();
     refreshOutputChoices();
     refreshEmptyStateHint();
@@ -158,11 +158,11 @@ export function initAssemblyTab(app, container) {
       return;
     }
     editingOutput = name;
-    const recipe = app.assemblyRecipes[name];
-    editingRequirements = { ...(recipe?.requirements || {}) };
-    editingCaptainLevel = recipe?.captainLevel ?? null;
+    const plan = app.assemblyPlans[name];
+    editingRequirements = { ...(plan?.requirements || {}) };
+    editingCaptainLevel = plan?.captainLevel ?? null;
     outputInput.value = name;
-    rateInput.value = String(recipe?.ratePerHour ?? 1);
+    rateInput.value = String(plan?.ratePerHour ?? 1);
     saveStatus.textContent = "";
     refreshTree();
     refreshListbox();
@@ -177,7 +177,7 @@ export function initAssemblyTab(app, container) {
       return;
     }
     if (app.kindLabel(name) === "Commodity") {
-      alert(`"${name}" isn't a known ore, refined material, or planetary resource - it will be tracked as a Commodity, unless it also has its own Assembly recipe.`);
+      alert(`"${name}" isn't a known ore, refined material, or planetary resource - it will be tracked as a Commodity, unless it also has its own Assembly Plan.`);
     }
     editingRequirements[name] = qty;
     refreshTree();
@@ -205,12 +205,12 @@ export function initAssemblyTab(app, container) {
       alert("Add at least one input requirement.");
       return;
     }
-    const recipe = new AssemblyRecipe(outputItem, rate);
-    for (const [itemName, qty] of Object.entries(editingRequirements)) recipe.setRequirement(itemName, qty);
-    recipe.captainLevel = editingCaptainLevel;
-    if (editingOutput && editingOutput !== outputItem) delete app.assemblyRecipes[editingOutput];
-    app.assemblyRecipes[outputItem] = recipe;
-    await storage.saveAssemblyRecipes(app.assemblyRecipes);
+    const plan = new AssemblyPlan(outputItem, rate);
+    for (const [itemName, qty] of Object.entries(editingRequirements)) plan.setRequirement(itemName, qty);
+    plan.captainLevel = editingCaptainLevel;
+    if (editingOutput && editingOutput !== outputItem) delete app.assemblyPlans[editingOutput];
+    app.assemblyPlans[outputItem] = plan;
+    await storage.saveAssemblyPlans(app.assemblyPlans);
     editingOutput = outputItem;
     refreshListbox();
     refreshOutputChoices();
@@ -218,7 +218,7 @@ export function initAssemblyTab(app, container) {
     // Inline, non-blocking - unlike the alert()s above (genuine input
     // errors worth interrupting for), a routine successful save shouldn't
     // make the player click through a dialog every single time.
-    saveStatus.textContent = `Saved Assembly recipe for "${outputItem}".`;
+    saveStatus.textContent = `Saved Assembly Plan for "${outputItem}".`;
     saveStatus.className = "status-text status-ok";
   }
 
@@ -231,8 +231,8 @@ export function initAssemblyTab(app, container) {
         listSelectLabel,
         listSelect,
         el("div", { class: "toolbar" }, [
-          el("button", { text: "New", onclick: newRecipe }),
-          el("button", { class: "danger", text: "Delete", onclick: deleteRecipe }),
+          el("button", { text: "New", onclick: newPlan }),
+          el("button", { class: "danger", text: "Delete", onclick: deletePlan }),
         ]),
       ]),
       el("div", { class: "detail-panel" }, [
@@ -246,7 +246,7 @@ export function initAssemblyTab(app, container) {
         el("div", { class: "scroll-table" }, [reqTable]),
         el("div", { class: "toolbar" }, [
           el("button", { text: "Remove Selected Input", onclick: removeSelected }),
-          el("button", { text: "Save Assembly Recipe", onclick: saveEditor }),
+          el("button", { text: "Save Assembly Plan", onclick: saveEditor }),
         ]),
         saveStatus,
       ]),
@@ -260,12 +260,11 @@ export function initAssemblyTab(app, container) {
   refreshEmptyStateHint();
 
   // Also refreshes the saved-list (not the in-progress edit form) when
-  // assemblyRecipes change externally - e.g. an Assembler Plans import from
+  // assemblyPlans change externally - e.g. an Assembler Plans import from
   // background.js while this tab is already open.
   app.refreshHooks.assembly = () => {
     refreshOutputChoices();
     refreshListbox();
     refreshEmptyStateHint();
   };
-  app.unsavedGuards.assembly = hasUnsavedChanges;
 }

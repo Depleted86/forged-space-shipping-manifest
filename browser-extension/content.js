@@ -1,10 +1,36 @@
-// Read-only content script for https://forgedspace.com/*. Scrapes the
-// storage screen's item rows and relays them to background.js for
-// inventory sync. Deliberately does NOT modify the page's DOM/appearance in
-// any way - an earlier version injected a "Manifest" panel directly into the
-// game's UI, but that was reverted in favor of a toolbar-triggered floating
-// window (popup.html/popup.js) that shows the same data outside the game
-// page entirely.
+// Content script for https://forgedspace.com/*. Scrapes storage/Corp
+// Store/Assembler Plans rows and relays them to background.js for sync
+// (see checkStorage()/checkCorpStore()/checkAssemblerPlans() below - none
+// of that ever modifies the page's own DOM, purely reads it), AND hosts
+// the in-page "Manifest" overlay (js/overlay-manifest.js) plus its Add
+// Blueprint modal (js/overlay-blueprint-modal.js).
+//
+// The overlay approach replaces an earlier floating popup-type browser
+// window (popup.html/popup.js, now removed). That relied on the OS window
+// manager's own "always on top" - not a real WebExtension capability
+// (browser.windows has no such option, by design, on every browser) - so
+// it only ever actually stayed above the game on setups where the user's
+// own window manager provided that themselves. An in-page overlay, appended
+// directly into this same document at the highest stacking context, has no
+// such dependency: it's part of the page's own render tree, so it's
+// guaranteed to sit above the game's own UI everywhere, on every platform,
+// with no window-manager cooperation needed at all. It lives inside a
+// Shadow DOM (see overlay-manifest.js's initManifestOverlay()) so its own
+// styles can never leak into or collide with the game's, and vice versa.
+//
+// Loaded as a classic (non-module) content script - Firefox's WebExtension
+// manifest schema doesn't recognize the content_scripts "type" property
+// Chrome MV3 added for declaring module-type content scripts (confirmed via
+// Firefox's own "unexpected property" warning when it was set), so this
+// file can't use a static top-level `import` the way overlay-manifest.js/
+// overlay-blueprint-modal.js do between themselves and storage.js/
+// calc-engine.js/catalog.js/dom-helpers.js. Instead, the overlay is pulled
+// in with a dynamic import() at the bottom of this file - that works from a
+// classic script in every browser with no manifest declaration at all,
+// since dynamic import() isn't tied to the parent script's own module-ness.
+// browser-compat.js is loaded the older way instead, as its own separate
+// classic script listed before this one in manifest.json, since it needs to
+// run before anything below calls browser.* .
 
 // Storage screen: each item is a row like
 //   <div class="p-3 rounded border cursor-pointer transition-colors
@@ -159,12 +185,12 @@ function checkStorage() {
 // filter button itself, since that would be automating the page rather
 // than just reading it.
 //
-// "All Plans" (unfiltered - ingredient lists are always fully visible
-// regardless of what's actually buildable yet) feeds the Recipes tab.
-// "R&D Unlocked" feeds the Assembly tab, since only R&D-gated items you've
-// actually researched can be queued there - each row's own R&D checkmark is
-// still checked too (see parseRdUnlock()), not just trust in which sidebar
-// filter is active, as a second guard. Captain-Level-gated items have no
+// Both "All Plans" and "R&D Unlocked" feed the Assembly tab only (see
+// checkAssemblerPlans() below) - never the Blueprints tab, which is
+// hand-entered only. "R&D Unlocked" additionally guards on each row's own
+// R&D checkmark (see parseRdUnlock()), not just trust in which sidebar
+// filter is active, since only R&D-gated items actually researched can be
+// queued there. Captain-Level-gated items have no
 // met/unmet indicator in the markup at all (just a bare "Lv N" or "—"), so
 // captainLevel is carried through as a display-only stat rather than used
 // to gate anything - the player judges that for themselves.
@@ -266,10 +292,11 @@ function checkAssemblerPlans() {
   if (filter === "All Plans") {
     // Every row on this screen is something built at the Assembly (it has a
     // rate/hr regardless of which gate, if any, it's behind) - this whole
-    // screen feeds the Assembly tab only, not Recipes. Recipes come from a
-    // separate set of category screens (Weapons, Defence, Reactors, etc.);
-    // importing from there was explored and deliberately shelved (see
-    // js/tab-recipes.js's header comment) - Recipes stay hand-entered only.
+    // screen feeds the Assembly tab only, not Blueprints. Blueprints come
+    // from a separate set of category screens (Weapons, Defence, Reactors,
+    // etc.); importing from there was explored and deliberately shelved (see
+    // js/tab-blueprints.js's header comment) - Blueprints stay hand-entered
+    // only.
     items = scraped;
   } else {
     // "R&D Unlocked" is a subset of the same data, already filtered by the
@@ -284,6 +311,81 @@ function checkAssemblerPlans() {
     .catch(() => {});
 }
 
-setInterval(checkStorage, STORAGE_POLL_MS);
-setInterval(checkCorpStore, CORP_POLL_MS);
-setInterval(checkAssemblerPlans, ASSEMBLER_POLL_MS);
+const pollIntervalIds = [
+  setInterval(checkStorage, STORAGE_POLL_MS),
+  setInterval(checkCorpStore, CORP_POLL_MS),
+  setInterval(checkAssemblerPlans, ASSEMBLER_POLL_MS),
+];
+
+// True once this content script's connection to its own extension has gone
+// stale - happens whenever the extension reloads (e.g. clicking "Reload" in
+// about:debugging, or Chrome's own extensions page) or is uninstalled,
+// while this script is still alive in an already-open tab. Firefox/Chrome
+// both leave an already-injected content script running in that case -
+// reloading only affects what gets injected into pages loaded AFTER the
+// reload - so without detecting this ourselves, the OLD instance's overlay
+// and edge handle just sit on the page forever, doing nothing (their
+// messages to background.js silently fail), never actually going away.
+//
+// Deliberately does NOT read runtime.id - confirmed via MDN's own list of
+// which runtime.* members are exposed to content scripts at all that id is
+// NOT among them (only getURL/sendMessage/connect/onMessage/onConnect/
+// getManifest/getFrameId/getDocumentId are), so reading it here would just
+// be undefined unconditionally and report "invalid" on every single page
+// load, valid or not - which is exactly what happened the first time this
+// was written this way, and is why scraping stopped working entirely
+// within ~2s of any page load. getURL() IS in that accessible set, and
+// throws once this context is actually dead, which is the real signal
+// wanted here.
+function isExtensionContextValid() {
+  try {
+    browser.runtime.getURL("");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let watchdogIntervalId = null;
+
+// Clears every interval this script started and removes both Shadow DOM
+// hosts by their known IDs (see overlay-manifest.js/overlay-blueprint-
+// modal.js's ensureHost()/initManifestOverlay()) - this is what actually
+// makes the leftover UI disappear on reload, since nothing else ever
+// references or cleans up this orphaned script otherwise.
+function teardown() {
+  for (const id of pollIntervalIds) clearInterval(id);
+  if (watchdogIntervalId) clearInterval(watchdogIntervalId);
+  document.getElementById("fsc-manifest-overlay-host")?.remove();
+  document.getElementById("fsc-blueprint-modal-host")?.remove();
+}
+
+// On its own short interval rather than folded into the scrape polls above,
+// so cleanup still happens even on a page with none of the storage/Corp
+// Store/Assembler Plans screens open (those three all early-return before
+// ever touching browser.runtime otherwise, so they'd never notice).
+watchdogIntervalId = setInterval(() => {
+  if (!isExtensionContextValid()) teardown();
+}, 2000);
+
+// Builds the overlay's Shadow DOM host + the always-visible edge handle
+// once, on page load - both start collapsed/hidden, per initManifestOverlay()
+// itself. Dynamically imported (see header comment) since this file can't
+// use a static top-level import.
+import(browser.runtime.getURL("js/overlay-manifest.js")).then((overlay) => {
+  if (!isExtensionContextValid()) return; // reloaded/uninstalled mid-import - nothing left to attach to
+  overlay.initManifestOverlay();
+
+  // The toolbar icon's own click handler (background.js) can't touch this
+  // page's DOM directly - it messages this content script instead, which is
+  // what actually owns the overlay's visibility state.
+  browser.runtime.onMessage.addListener((msg) => {
+    if (msg && msg.type === "fsc-toggle-overlay") overlay.toggleManifestOverlay();
+  });
+}).catch((err) => {
+  // Without this, a failure here (e.g. a module missing from manifest.json's
+  // web_accessible_resources) throws an unhandled rejection that shows up in
+  // the console but leaves no trace of what broke on-page - the overlay just
+  // silently never appears.
+  console.error("Forged Space Shipping Manifest: failed to load the Manifest overlay.", err);
+});

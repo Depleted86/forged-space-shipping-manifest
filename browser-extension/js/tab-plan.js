@@ -7,7 +7,8 @@
 // the result tables. On every successful calculation the result is written
 // to the `toMineData` storage key - this replaces both
 // app.last_plan_result (Python, in-memory only) and bridge_server.py's GET
-// handler, since the toolbar popup (popup.js) now reads that key directly.
+// handler, since the in-page Manifest overlay (js/overlay-manifest.js) now
+// reads that key directly.
 //
 // entriesToTotals() and toStorableToMineData() used to be defined here but
 // moved to calc-engine.js (2026-08-09) so background.js can import them for
@@ -88,9 +89,9 @@ export function initPlanTab(app, container) {
     const buyModes = app.settings.item_acquisition_mode || {};
     const stillNeeded = new Set();
     for (const entries of Object.values(app.builds)) {
-      const totals = entriesToTotals(app.recipes, entries);
+      const totals = entriesToTotals(app.blueprints, entries);
       for (const name of Object.keys(totals)) stillNeeded.add(name);
-      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory, 20, buyModes);
+      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyPlans, app.inventory, 20, buyModes);
       for (const name of Object.keys(expanded)) stillNeeded.add(name);
     }
     let changed = false;
@@ -205,23 +206,23 @@ export function initPlanTab(app, container) {
   }
 
   // ============================ Add-to-plan controls ============================
-  const recipeSelectLabel = el("label", { for: "plan-recipe-select", class: "visually-hidden", text: "Recipe to add" });
-  const recipeSelect = el("select", { id: "plan-recipe-select" });
-  const recipeQtyLabel = el("label", { for: "plan-recipe-qty", class: "visually-hidden", text: "Recipe quantity" });
-  const recipeQtyInput = el("input", { id: "plan-recipe-qty", type: "text", value: "1", style: "width:70px" });
-  function refreshPlanRecipeCombo() {
-    clear(recipeSelect);
-    for (const name of Object.keys(app.recipes).sort()) recipeSelect.appendChild(el("option", { value: name, text: name }));
+  const blueprintSelectLabel = el("label", { for: "plan-blueprint-select", class: "visually-hidden", text: "Blueprint to add" });
+  const blueprintSelect = el("select", { id: "plan-blueprint-select" });
+  const blueprintQtyLabel = el("label", { for: "plan-blueprint-qty", class: "visually-hidden", text: "Blueprint quantity" });
+  const blueprintQtyInput = el("input", { id: "plan-blueprint-qty", type: "text", value: "1", style: "width:70px" });
+  function refreshPlanBlueprintCombo() {
+    clear(blueprintSelect);
+    for (const name of Object.keys(app.blueprints).sort()) blueprintSelect.appendChild(el("option", { value: name, text: name }));
   }
 
-  async function addRecipeToPlan() {
-    const name = recipeSelect.value;
-    const qty = parseFloat(recipeQtyInput.value);
+  async function addBlueprintToPlan() {
+    const name = blueprintSelect.value;
+    const qty = parseFloat(blueprintQtyInput.value);
     if (!name || Number.isNaN(qty) || qty <= 0) {
-      alert("Choose a recipe and enter a positive quantity.");
+      alert("Choose a blueprint and enter a positive quantity.");
       return;
     }
-    planEntries.push(["recipe", name, qty]);
+    planEntries.push(["blueprint", name, qty]);
     renderEntriesList();
     await saveActiveBuild();
   }
@@ -232,10 +233,10 @@ export function initPlanTab(app, container) {
   // just raw/refined materials, so that name has to be pickable here too.
   // A live callback (not a snapshot array), same reasoning as Assembly's own
   // output-item field in tab-assembly.js: always reflects whatever's
-  // currently in app.assemblyRecipes, including anything just imported from
+  // currently in app.assemblyPlans, including anything just imported from
   // the Assembler Plans screen.
   function adhocItemCandidates() {
-    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyRecipes)])];
+    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyPlans)])];
   }
   const itemDatalistId = "plan-item-datalist";
   const itemDatalist = el("datalist", { id: itemDatalistId }, adhocItemCandidates().map((n) => el("option", { value: n })));
@@ -263,7 +264,11 @@ export function initPlanTab(app, container) {
   function renderEntriesList() {
     clear(entriesSelect);
     planEntries.forEach(([kind, name, qty], i) => {
-      const label = kind === "recipe" ? `Recipe: ${name} x${qty}` : `Material: ${name} x${qty}`;
+      // "recipe" is the pre-2026-08-15 tag for what's now saved as
+      // "blueprint" (see calc-engine.js's entriesToTotals()) - a build saved
+      // before that rename can still have old-tagged entries, so both
+      // display the same way here.
+      const label = kind === "blueprint" || kind === "recipe" ? `Blueprint: ${name} x${qty}` : `Material: ${name} x${qty}`;
       entriesSelect.appendChild(el("option", { value: String(i), text: label }));
     });
   }
@@ -306,11 +311,11 @@ export function initPlanTab(app, container) {
   const sourcesContainer = el("div", { class: "sources-container" });
 
   async function buildRequirements() {
-    const totals = entriesToTotals(app.recipes, planEntries);
+    const totals = entriesToTotals(app.blueprints, planEntries);
     app.planBaseRequirements = totals;
     app.settings.item_acquisition_mode = app.settings.item_acquisition_mode || {};
     const buyModes = app.settings.item_acquisition_mode;
-    const { expanded, assemblyHours } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory, 20, buyModes);
+    const { expanded, assemblyHours } = expandCommodities(app.catalog, totals, app.assemblyPlans, app.inventory, 20, buyModes);
     app.planRequirements = expanded;
 
     clear(sourcesContainer);
@@ -356,8 +361,8 @@ export function initPlanTab(app, container) {
             el("label", { class: "status-ok", text: `${name} — found on: ${obj.planetTypes.map((p) => p.name).join(", ")} — need ${need.toFixed(1)} — ${hoursText}` }),
           ])
         );
-      } else if (app.assemblyRecipes[name]) {
-        // Commodity with a known Assembly recipe - per-item choice: "Mine"
+      } else if (app.assemblyPlans[name]) {
+        // Commodity with a known Assembly Plan - per-item choice: "Mine"
         // cascades it into its own ingredient needs (same as always) and
         // shows a sub-category breakdown of the fully-expanded raw
         // resources that costs, right under this row; "Buy" leaves it flat
@@ -396,12 +401,12 @@ export function initPlanTab(app, container) {
             ])
           );
           // Sub-category: this item's own fully-expanded raw resource
-          // breakdown (gross recipe cost, not netted against inventory -
-          // see itemResourceBreakdown() in calc-engine.js) - purely
-          // informational attribution, doesn't change the combined Mining
-          // totals below (those still merge every "Mine" item's ore needs
-          // into one shared pool, same as always).
-          for (const sub of itemResourceBreakdown(app.catalog, name, need, app.assemblyRecipes, buyModes)) {
+          // breakdown (gross Assembly Plan cost, not netted against
+          // inventory - see itemResourceBreakdown() in calc-engine.js) -
+          // purely informational attribution, doesn't change the combined
+          // Mining totals below (those still merge every "Mine" item's ore
+          // needs into one shared pool, same as always).
+          for (const sub of itemResourceBreakdown(app.catalog, name, need, app.assemblyPlans, buyModes)) {
             sourcesContainer.appendChild(
               el("div", { class: "field-row source-subitem" }, [el("label", { text: `↳ ${sub.name}: ${sub.need.toFixed(1)}` })])
             );
@@ -543,7 +548,7 @@ export function initPlanTab(app, container) {
     // Items the player explicitly chose "Buy" for (per-item, in Item
     // sources) are unresolved on purpose - they show up in the Buy section
     // instead, not as a warning here. Only warn about a Commodity that's
-    // unresolved because no Assembly recipe exists for it at all yet.
+    // unresolved because no Assembly Plan exists for it at all yet.
     const buyModes = app.settings.item_acquisition_mode || {};
     const names = Object.keys(result.unresolved).filter((n) => app.catalog.classify(n)[0] === "unknown" && buyModes[n] !== "buy");
     missingAssemblyWarning.textContent = names.length
@@ -563,7 +568,7 @@ export function initPlanTab(app, container) {
     }
 
     const buyModes = app.settings.item_acquisition_mode || {};
-    const { expanded, assemblyHours } = expandCommodities(app.catalog, app.planBaseRequirements, app.assemblyRecipes, app.inventory, 20, buyModes);
+    const { expanded, assemblyHours } = expandCommodities(app.catalog, app.planBaseRequirements, app.assemblyPlans, app.inventory, 20, buyModes);
     app.planRequirements = expanded;
 
     const oreChoices = {};
@@ -594,8 +599,8 @@ export function initPlanTab(app, container) {
     const combined = {};
     const contributors = {}; // itemName -> Set(buildName)
     for (const [buildName, entries] of Object.entries(app.builds)) {
-      const totals = entriesToTotals(app.recipes, entries);
-      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, app.inventory, 20, buyModes);
+      const totals = entriesToTotals(app.blueprints, entries);
+      const { expanded } = expandCommodities(app.catalog, totals, app.assemblyPlans, app.inventory, 20, buyModes);
       for (const [item, qty] of Object.entries(expanded)) {
         combined[item] = (combined[item] || 0) + qty;
         if (!contributors[item]) contributors[item] = new Set();
@@ -624,7 +629,7 @@ export function initPlanTab(app, container) {
       if (ore) oreChoices[item] = ore;
     }
     const buyModes = app.settings.item_acquisition_mode || {};
-    const { assemblyHours } = expandCommodities(app.catalog, combined, app.assemblyRecipes, app.inventory, 20, buyModes);
+    const { assemblyHours } = expandCommodities(app.catalog, combined, app.assemblyPlans, app.inventory, 20, buyModes);
     const result = planMining(app.catalog, combined, app.inventory, oreChoices, cargoCapacity, harvesterTotals(app.harvesterSlots), app.pendingRefining, assemblyHours);
 
     app.planRequirements = combined;
@@ -771,7 +776,7 @@ export function initPlanTab(app, container) {
       buildStatus,
       syncStatus,
       el("h3", { class: "section-title", text: "Add to plan" }),
-      el("div", { class: "toolbar" }, [recipeSelectLabel, recipeSelect, recipeQtyLabel, recipeQtyInput, el("button", { text: "Add Recipe to Plan", onclick: addRecipeToPlan })]),
+      el("div", { class: "toolbar" }, [blueprintSelectLabel, blueprintSelect, blueprintQtyLabel, blueprintQtyInput, el("button", { text: "Add Blueprint to Plan", onclick: addBlueprintToPlan })]),
       el("div", { class: "toolbar" }, [materialLabel, materialInput, materialQtyLabel, materialQtyInput, el("button", { text: "Add Item to Plan", onclick: addMaterialToPlan })]),
       itemDatalist,
       el("h3", { class: "section-title", text: "Plan items" }),
@@ -807,7 +812,7 @@ export function initPlanTab(app, container) {
   );
 
   refreshBuildCombo();
-  refreshPlanRecipeCombo();
+  refreshPlanBlueprintCombo();
   renderEntriesList();
   renderSyncStatus();
 
@@ -826,7 +831,7 @@ export function initPlanTab(app, container) {
     }
   })();
 
-  app.refreshHooks.planRecipeCombo = refreshPlanRecipeCombo;
+  app.refreshHooks.planBlueprintCombo = refreshPlanBlueprintCombo;
   app.refreshHooks.planCargoCapacity = (cargo) => { cargoInput.value = String(cargo); };
   app.refreshHooks.plan = async () => {
     renderSyncStatus();

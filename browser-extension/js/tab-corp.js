@@ -32,7 +32,7 @@ export function initCorpTab(app, container) {
   const tableWrap = el("div", { class: "scroll-table" }, [table]);
 
   // ---- Bulk "Create Corp Plan" grid ----
-  // Typing entries one at a time into Plan a Build (recipe-by-recipe or
+  // Typing entries one at a time into Plan a Build (blueprint-by-blueprint or
   // item-by-item) doesn't scale to a large corp order (dozens of items
   // spanning ore/refined/commodity/assembly/planet categories, matching the
   // kind of spreadsheet corps already track these against by hand) - this
@@ -55,7 +55,7 @@ export function initCorpTab(app, container) {
   const corpPlanNameInput = el("input", { id: "corp-plan-name", type: "text", placeholder: "Build name" });
 
   function itemCategories() {
-    const assemblyNames = new Set(Object.keys(app.assemblyRecipes));
+    const assemblyNames = new Set(Object.keys(app.assemblyPlans));
     // "Commodities" = anything ever seen as a plain named item (personal or
     // corp inventory) that ISN'T one of the categories above - there's no
     // master list of every possible commodity anywhere in this extension,
@@ -200,7 +200,7 @@ export function initCorpTab(app, container) {
   // prompt (the data's already safely persisted by then). This grid can
   // hold dozens of typed quantities, so losing it to a stray click deserves
   // the same confirm-before-discard guard every other editor in the app has
-  // (see tab-recipes.js/tab-assembly.js's confirmDiscard()).
+  // (see tab-blueprints.js/tab-assembly.js's confirmDiscard()).
   function cancelCorpPlanGrid() {
     if (JSON.stringify(corpPlanQtys) !== JSON.stringify(corpPlanQtysSnapshot)) {
       if (!confirm("Discard this corp plan? Quantities you've typed will be lost.")) return;
@@ -394,7 +394,7 @@ export function initCorpTab(app, container) {
   // is open, see content.js) doesn't tear down and rebuild the table -
   // and the focused input along with it - out from under someone mid-edit.
   // Same class of bug this codebase has already hit and fixed for the
-  // batch-count input in popup.js and the harvester roster in
+  // batch-count input in js/overlay-manifest.js and the harvester roster in
   // tab-planets.js. Data still updates and saves normally while suppressed
   // (see recalc()) - only the visual rebuild is deferred, until the
   // input's own blur handler re-renders with whatever's current by then.
@@ -516,10 +516,11 @@ export function initCorpTab(app, container) {
     // No "Trips to farm" column here - that figure only ever makes sense
     // for raw ore (something actually hauled in cargo-hold loads), but
     // this table mixes in every category, where a trip count is
-    // meaningless at best and misleading at worst. The Manifest popup
-    // already gets this right (see popup.js's renderCorpRow(), which only
-    // shows trips when item.kind === "ore") - this table just drops the
-    // column outright rather than needing the same per-row conditional.
+    // meaningless at best and misleading at worst. The Manifest overlay
+    // already gets this right (see js/overlay-manifest.js's renderCorpRow(),
+    // which only shows trips when item.kind === "ore") - this table just
+    // drops the column outright rather than needing the same per-row
+    // conditional.
     const thead = el("thead", {}, [el("tr", {}, [el("th", { text: "Item" }), el("th", { text: "Need" }), el("th", { text: "Have" }), el("th", { text: "Shortfall" })])]);
     const tbody = el("tbody");
     for (const category of categoryOrder) {
@@ -569,7 +570,7 @@ export function initCorpTab(app, container) {
       if (!suppressTableRender) renderRows(empty);
       return;
     }
-    const totals = entriesToTotals(app.recipes, entries);
+    const totals = entriesToTotals(app.blueprints, entries);
     // Cascade Assembly-produced Commodities down into their own ore/material
     // ingredient totals, so a corp order for a finished commodity also
     // surfaces the specific ore needed to assemble it, not just the
@@ -578,7 +579,7 @@ export function initCorpTab(app, container) {
     // recalculateActiveBuildCorpData()) - per-item Buy/Mine is a personal
     // acquisition preference (settings.item_acquisition_mode), and doesn't
     // change what the corp target itself is actually made of.
-    const { expanded } = expandCommodities(app.catalog, totals, app.assemblyRecipes, { other: app.corpInventory || {} });
+    const { expanded } = expandCommodities(app.catalog, totals, app.assemblyPlans, { other: app.corpInventory || {} });
     const cargoCapacity = Number(app.settings.cargo_capacity || 600);
     // Same per-player ore_choices setting Personal mining uses, so "which
     // ore sources this material" reflects this player's own configured
@@ -588,7 +589,7 @@ export function initCorpTab(app, container) {
       const ore = app.catalog.findOre(oreName);
       if (ore) oreChoices[item] = ore;
     }
-    const data = toStorableCorpData(app.catalog, app.assemblyRecipes, oreChoices, expanded, app.corpInventory || {}, cargoCapacity, app.corpHaveOverrides || {});
+    const data = toStorableCorpData(app.catalog, app.assemblyPlans, oreChoices, expanded, app.corpInventory || {}, cargoCapacity, app.corpHaveOverrides || {});
     lastCorpData = data;
     await storage.saveCorpToMineData(data);
     if (!suppressTableRender) renderRows(data);
@@ -610,11 +611,6 @@ export function initCorpTab(app, container) {
     populateBuildOptions();
     await recalc();
   };
-  // Only "dirty" while the bulk grid is actually open AND something's
-  // changed since it opened - same comparison cancelCorpPlanGrid() itself
-  // uses, so this Cancel's own guard and dashboard.js's page-navigation
-  // guard never disagree about whether there's really something to lose.
-  app.unsavedGuards.corp = () => corpPlanSection.style.display !== "none" && JSON.stringify(corpPlanQtys) !== JSON.stringify(corpPlanQtysSnapshot);
 
   const markCompleteBtn = el("button", { class: "corp-order-btn", text: "Mark Corp Order Complete", onclick: () => finishCorpOrder(true) });
   const deleteOrderBtn = el("button", { class: "danger corp-order-btn", text: "Delete Corp Order", onclick: () => finishCorpOrder(false) });

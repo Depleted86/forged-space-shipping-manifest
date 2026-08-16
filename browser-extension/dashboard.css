@@ -79,21 +79,6 @@ a:hover {
   color: var(--cyan);
 }
 
-.header-btn {
-  background: var(--bg-panel-alt);
-  color: var(--text-dim);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 6px 12px;
-  cursor: pointer;
-  font-size: 13px;
-}
-
-.header-btn:hover {
-  color: var(--text);
-  border-color: var(--cyan-dim);
-}
-
 .tab-nav {
   display: flex;
   gap: 6px;
@@ -253,8 +238,8 @@ table.data-table tbody tr.selected {
 
 /* Listbox-style <select size="N">: browsers size a <select> to fit its
    widest <option> by default (not "fill parent" like a block element), so
-   with zero options - an empty Recipes/Assembly/Plan-items list - it
-   collapses to a tiny intrinsic width. min-width keeps the Recipes and
+   with zero options - an empty Blueprints/Assembly/Plan-items list - it
+   collapses to a tiny intrinsic width. min-width keeps the Blueprints and
    Assembly tab's left column (and the Plan tab's items list, which isn't
    inside a .side-list) usable even when there's nothing listed yet. */
 .list-select {

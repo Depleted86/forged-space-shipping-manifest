@@ -2,7 +2,7 @@
 
 A browser extension (Chrome, Firefox, Edge) that helps plan mining trips
 for the game [Forged Space](https://forgedspace.com): tracks ore/material
-recipes, planet harvesting, Assembly commodity chains, and your live
+blueprints, planet harvesting, Assembly commodity chains, and your live
 in-game inventory, then works out exactly what still needs to be mined for
 a given build. Also tracks corp orders against the corp's shared Store,
 with CSV export/import for coordinating with corp-mates who'd rather work
@@ -17,12 +17,16 @@ developer of Forged Space, under the following conditions:
 
 - **Local-only, always.** The extension makes no network requests of any
   kind and never transmits anything anywhere. The only data it stores is
-  your own Forged Space game data (inventory, recipes, builds, settings),
+  your own Forged Space game data (inventory, blueprints, builds, settings),
   saved locally in your browser and nowhere else.
 - **Read-only, always.** It only reads what's already on the page you're
   looking at (via `content.js`, the only script it injects into the
   game). It never clicks anything, fills in a form, or takes any action in
-  the game on your behalf.
+  the game on your behalf. `content.js` does render one piece of its own
+  UI directly onto the page - a small floating "Manifest" overlay - but
+  that's a separate, self-contained element the extension draws and
+  controls itself; it never reads from, writes to, or changes the game's
+  own page content.
 - **Source available for public review**, specifically so that anyone
   installing it can verify the two points above for themselves rather than
   taking it on faith.
@@ -72,9 +76,10 @@ owner.
 ## Project layout
 
 - `browser-extension/` — the extension itself (Manifest V3). See
-  `dashboard.html`/`dashboard.js` for the main planner UI, `content.js`
-  for the (strictly read-only) game-page scraper, `background.js` for the
-  service worker, and `popup.html`/`popup.js` for the floating "Manifest"
-  window.
+  `dashboard.html`/`dashboard.js` for the main planner UI (opened as an
+  ordinary tab), `content.js` for the game-page scraper plus the in-page
+  "Manifest" overlay it hosts (`js/overlay-manifest.js` and
+  `js/overlay-blueprint-modal.js`), and `background.js` for the service
+  worker.
 - `browser-extension/test/` — `node --test` suite for the calculation
   engine (`js/calc-engine.js`), checked against golden-master fixtures.

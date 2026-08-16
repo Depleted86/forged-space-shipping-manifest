@@ -12,42 +12,36 @@
 // in the background the whole time the browser is open. This is fine for
 // this file: handleStorageScrape() and the action click handler are both
 // pure event-response functions with no reliance on state surviving between
-// invocations (see findManifestWindow() below, which deliberately queries
-// live window state each time instead of remembering a window id in a
-// variable, since any such variable would silently reset to its initial
-// value every time the worker restarts).
+// invocations.
 //
 // The old GET /to-mine.json polling loop that used to live here is gone:
-// the "Manifest" window (popup.html/popup.js) reads storage.local's
-// `toMineData` key directly (extension pages have storage access, so no
-// relay was needed), and the dashboard's Plan a Build tab writes that key
-// on every calculation.
+// the Manifest overlay (js/overlay-manifest.js, injected by content.js
+// directly into the game page) reads storage.local's `toMineData` key
+// directly (content scripts have storage access, so no relay is needed),
+// and the dashboard's Plan a Build tab writes that key on every
+// calculation.
 //
-// The toolbar icon opens/focuses a single floating browser window (type:
-// "popup"), not an action dropdown - a dropdown always closes on blur/
-// outside-click with no way to override that, which didn't fit the user's
-// ask for something that stays open and can be dragged beside the game
-// window. That SAME window can show either the full dashboard.html or the
-// compact popup.html ("Manifest") - popup.js's "Dashboard →" button and
-// dashboard.js's "← Manifest" button both just navigate it in place
-// (window.location), not open a separate tab.
-//
-// The toolbar icon opens straight into the DASHBOARD, not the compact
-// Manifest view - deliberately, since browser.windows.create() can bake
-// the target size in at creation time with no race to worry about, unlike
-// resizing an already-open window right before/after a same-window
-// navigation (which is exactly what made switching TO the dashboard
-// unreliable on Chrome - see popup.js's/dashboard.js's own comments on
-// that). A first-time/every-time player lands somewhere they can actually
-// see everything and set builds up, then switches to the compact Manifest
-// view themselves once ready - that transition (dashboard -> Manifest) has
-// popup.js's own resizeToFit() as a reliable, independently-working
-// correction step once it loads, so it doesn't have the same problem.
+// The Manifest view is no longer a separate browser window at all - it used
+// to be (popup.html/popup.js, now removed), staying "on top" of the game
+// only via the OS window manager's own always-on-top, which isn't a real
+// WebExtension capability (browser.windows has no such option, on any
+// browser, by design) and so only worked on setups where the user's own
+// window manager happened to provide it. It's now an in-page overlay
+// rendered directly into the game page at the highest CSS stacking level
+// (see content.js/js/overlay-manifest.js) - guaranteed to render above the
+// game everywhere, no window-manager cooperation needed. The toolbar icon
+// toggles that overlay's visibility on whichever forgedspace.com tab is
+// open (see action.onClicked below) rather than opening/focusing a window.
+// The dashboard is reached via its own "Dashboard →" button on the
+// overlay, which opens dashboard.html as a completely ordinary new tab
+// (see handleOpenDashboard()) - no more popup-type window, no more
+// same-window navigation between the two, so none of the resize-timing
+// problems that came with that model apply anymore either.
 
 import "./js/browser-compat.js";
 import { Catalog } from "./js/catalog.js";
 import { applyItemsToInventory } from "./js/inventory-classify.js";
-import { AssemblyRecipe, entriesToTotals, expandCommodities, harvesterTotals, planMining, toStorableCorpData, toStorableToMineData } from "./js/calc-engine.js";
+import { AssemblyPlan, entriesToTotals, expandCommodities, harvesterTotals, planMining, toStorableCorpData, toStorableToMineData } from "./js/calc-engine.js";
 import * as storage from "./js/storage.js";
 
 const catalog = new Catalog();
@@ -66,43 +60,49 @@ browser.runtime.onInstalled.addListener(async (details) => {
   await browser.tabs.create({ url: browser.runtime.getURL("welcome.html") });
 });
 
-// Matches popup.js's/dashboard.js's own DASHBOARD_WIDTH/HEIGHT - kept as a
-// separate copy here too rather than shared/imported, same reasoning as
-// dashboard.js's own copy (these files don't otherwise share a module, and
-// it's just two numbers).
-const DASHBOARD_WIDTH = 1000;
-const DASHBOARD_HEIGHT = 700;
-
-// Finds an already-open floating window by looking for a tab pointing at
-// EITHER of this extension's own pages - popup.html ("Manifest") or
-// dashboard.html, whichever it currently happens to be showing - not by
-// remembering a window id, since an in-memory variable wouldn't survive a
-// service-worker restart. Reading tab.url for the extension's own pages
-// doesn't require the "tabs" permission (only reading OTHER sites' tab
-// URLs does).
-async function findManifestWindow() {
-  const popupUrl = browser.runtime.getURL("popup.html");
-  const dashboardUrl = browser.runtime.getURL("dashboard.html");
-  const wins = await browser.windows.getAll({ populate: true });
-  return wins.find((win) => win.tabs && win.tabs.some((tab) => tab.url === popupUrl || tab.url === dashboardUrl)) || null;
-}
-
+// Toggles the Manifest overlay on whichever forgedspace.com tab is open -
+// finds one via a host-permission-scoped tabs.query() (no "tabs" permission
+// needed: an extension can always see full tab info, url included, for any
+// tab matching a host it already has permission for), focuses it, and
+// messages its content script to flip the overlay's visibility (see
+// content.js's onMessage listener / overlay-manifest.js's
+// toggleManifestOverlay()). If no game tab is open at all, there's nothing
+// to toggle - the overlay only exists inside that page - so this opens one
+// instead of silently doing nothing; the player may need one more click
+// once it's finished loading to actually reveal the overlay, since
+// reliably auto-showing it the instant a brand new tab's content script
+// finishes injecting isn't achievable without either a listener that can
+// get lost across an MV3 service-worker restart (dynamically-added
+// tabs.onUpdated listeners aren't guaranteed to survive that the way
+// top-level ones are) or added storage-flag bookkeeping - not worth the
+// complexity for what's just a "click once more" inconvenience.
 browser.action.onClicked.addListener(async () => {
-  const existing = await findManifestWindow();
-  if (existing) {
-    await browser.windows.update(existing.id, { focused: true });
+  const tabs = await browser.tabs.query({ url: "https://forgedspace.com/*" });
+  if (tabs.length > 0) {
+    const tab = tabs[0];
+    await browser.tabs.update(tab.id, { active: true });
+    if (tab.windowId != null) await browser.windows.update(tab.windowId, { focused: true });
+    await browser.tabs.sendMessage(tab.id, { type: "fsc-toggle-overlay" }).catch(() => {});
     return;
   }
-  // Full dashboard size baked in at creation time - see this file's header
-  // comment for why opening straight into dashboard.html (rather than the
-  // compact popup.html) is deliberate.
-  await browser.windows.create({
-    url: browser.runtime.getURL("dashboard.html"),
-    type: "popup",
-    width: DASHBOARD_WIDTH,
-    height: DASHBOARD_HEIGHT,
-  });
+  await browser.tabs.create({ url: "https://forgedspace.com/" });
 });
+
+// The Manifest overlay's "Dashboard →" button (a content script can't call
+// browser.tabs directly, so it messages this instead - see content.js's
+// onMessage listener). Focuses an already-open dashboard tab if one
+// exists, rather than piling up duplicates on repeated clicks.
+async function handleOpenDashboard() {
+  const dashboardUrl = browser.runtime.getURL("dashboard.html");
+  const tabs = await browser.tabs.query({ url: dashboardUrl });
+  if (tabs.length > 0) {
+    const tab = tabs[0];
+    await browser.tabs.update(tab.id, { active: true });
+    if (tab.windowId != null) await browser.windows.update(tab.windowId, { focused: true });
+    return;
+  }
+  await browser.tabs.create({ url: dashboardUrl });
+}
 
 // items: [{name, quantity}, ...] scraped from the storage screen by
 // content.js. Classifies against the shared Catalog and merges into
@@ -162,8 +162,8 @@ async function recalculateActiveBuildCorpData() {
   const entries = builds[activeCorpBuildName];
   if (!entries || entries.length === 0) return;
 
-  const recipes = await storage.loadRecipes();
-  const assemblyRecipes = await storage.loadAssemblyRecipes();
+  const blueprints = await storage.loadBlueprints();
+  const assemblyPlans = await storage.loadAssemblyPlans();
   const corpInventory = await storage.loadCorpInventory();
   const corpHaveOverrides = await storage.loadCorpHaveOverrides();
   const settings = await storage.loadSettings();
@@ -175,20 +175,19 @@ async function recalculateActiveBuildCorpData() {
     if (ore) oreChoices[item] = ore;
   }
 
-  const totals = entriesToTotals(recipes, entries);
-  const { expanded } = expandCommodities(catalog, totals, assemblyRecipes, { other: corpInventory });
-  await storage.saveCorpToMineData(toStorableCorpData(catalog, assemblyRecipes, oreChoices, expanded, corpInventory, cargoCapacity, corpHaveOverrides));
+  const totals = entriesToTotals(blueprints, entries);
+  const { expanded } = expandCommodities(catalog, totals, assemblyPlans, { other: corpInventory });
+  await storage.saveCorpToMineData(toStorableCorpData(catalog, assemblyPlans, oreChoices, expanded, corpInventory, cargoCapacity, corpHaveOverrides));
 }
 
 // The previously-calculated plan (toMineData) was computed against the OLD
 // inventory, so it's now stale. dashboard.js has its own storage.onChanged
 // listener that recalculates when the Plan a Build tab notices an inventory
 // change, but that only fires while the dashboard page is actually open -
-// and since switching the floating window back to the compact "Manifest"
-// view fully unloads the dashboard (see popup.js/
-// dashboard.js's same-window navigation), the dashboard is often NOT open
-// during normal play. This headless recalculation is what keeps the
-// floating window's numbers correct in that (common) case. Mirrors
+// and the dashboard is now always a separate, ordinary tab a player has to
+// deliberately open (see js/overlay-manifest.js), so it's very often NOT
+// open during normal play. This headless recalculation is what keeps the
+// in-page Manifest overlay's numbers correct in that (common) case. Mirrors
 // tab-plan.js's calculatePlan() math for a single build, except ore
 // choices come from the already-persisted `settings.ore_choices` instead
 // of live <select> elements (there's no DOM here) - the same approach
@@ -200,8 +199,8 @@ async function recalculateActiveBuildToMineData() {
   const entries = builds[activeBuildName];
   if (!entries || entries.length === 0) return;
 
-  const recipes = await storage.loadRecipes();
-  const assemblyRecipes = await storage.loadAssemblyRecipes();
+  const blueprints = await storage.loadBlueprints();
+  const assemblyPlans = await storage.loadAssemblyPlans();
   const inventory = await storage.loadInventory(catalog);
   const pendingRefining = await storage.loadPendingRefining();
   const settings = await storage.loadSettings();
@@ -209,8 +208,8 @@ async function recalculateActiveBuildToMineData() {
   const harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
   const cargoCapacity = Number(settings.cargo_capacity || 600);
 
-  const totals = entriesToTotals(recipes, entries);
-  const { expanded, assemblyHours } = expandCommodities(catalog, totals, assemblyRecipes, inventory, 20, settings.item_acquisition_mode);
+  const totals = entriesToTotals(blueprints, entries);
+  const { expanded, assemblyHours } = expandCommodities(catalog, totals, assemblyPlans, inventory, 20, settings.item_acquisition_mode);
 
   const oreChoices = {};
   for (const [item, oreName] of Object.entries(settings.ore_choices || {})) {
@@ -226,45 +225,45 @@ async function recalculateActiveBuildToMineData() {
 // scraped from the Assembler Plans screen by content.js - both its "All
 // Plans" and "R&D Unlocked" filters feed here (the latter already
 // pre-filtered to rdMet rows there); everything on that screen is
-// Assembly-produced, so this only ever writes assemblyRecipes, never
-// recipes (see tab-recipes.js's own header comment - Recipes stay
+// Assembly-produced, so this only ever writes assemblyPlans, never
+// blueprints (see tab-blueprints.js's own header comment - Blueprints stay
 // hand-entered only; a separate Item Database scrape for those was
 // explored and deliberately shelved as more complicated than it's worth).
-// Only touches assemblyRecipes actually present in this scrape - anything
-// not scraped this round (e.g. a hand-entered recipe for something outside
-// this database) is left completely alone. For items that ARE scraped,
-// this is treated as authoritative: requirements no longer present in the
-// scraped ingredient list are pruned, so a recipe stays in sync if Coops
-// changes it in a future update rather than silently accumulating stale
-// entries.
+// Only touches assemblyPlans actually present in this scrape - anything
+// not scraped this round (e.g. a hand-entered Assembly Plan for something
+// outside this database) is left completely alone. For items that ARE
+// scraped, this is treated as authoritative: requirements no longer
+// present in the scraped ingredient list are pruned, so a plan stays in
+// sync if Coops changes it in a future update rather than silently
+// accumulating stale entries.
 async function handleAssemblerScrape(items) {
-  const assemblyRecipes = await storage.loadAssemblyRecipes();
+  const assemblyPlans = await storage.loadAssemblyPlans();
   for (const item of items || []) {
     if (!item || !item.name) continue;
-    const recipe = assemblyRecipes[item.name] || new AssemblyRecipe(item.name, item.ratePerHour || 1);
-    recipe.ratePerHour = item.ratePerHour || recipe.ratePerHour || 1;
+    const plan = assemblyPlans[item.name] || new AssemblyPlan(item.name, item.ratePerHour || 1);
+    plan.ratePerHour = item.ratePerHour || plan.ratePerHour || 1;
     const scrapedReqs = item.requirements || {};
-    for (const [reqName, qty] of Object.entries(scrapedReqs)) recipe.setRequirement(reqName, qty);
-    for (const existingName of Object.keys(recipe.requirements)) {
-      if (!(existingName in scrapedReqs)) recipe.setRequirement(existingName, 0);
+    for (const [reqName, qty] of Object.entries(scrapedReqs)) plan.setRequirement(reqName, qty);
+    for (const existingName of Object.keys(plan.requirements)) {
+      if (!(existingName in scrapedReqs)) plan.setRequirement(existingName, 0);
     }
-    recipe.captainLevel = item.captainLevel ?? null;
-    assemblyRecipes[item.name] = recipe;
+    plan.captainLevel = item.captainLevel ?? null;
+    assemblyPlans[item.name] = plan;
   }
-  await storage.saveAssemblyRecipes(assemblyRecipes);
+  await storage.saveAssemblyPlans(assemblyPlans);
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
 }
 
-// Lets the Manifest window (popup.js) set exactly how many batches of an
-// ore are currently started/pending refining, without needing the full
-// dashboard open - an absolute SET (typed number), not an increment, to
-// match the real workflow: type the count when you start a run, then reset
-// it back to 0 once you've collected the output and are between runs. Same
-// underlying pendingRefining storage key and semantics as the dashboard's
-// own Inventory/Plan a Build tab controls (see tab-inventory.js's
-// applyLocalPendingDeduction(), mirrored here since the popup has no `app`
-// state to call that against directly).
+// Lets the in-page Manifest overlay (js/overlay-manifest.js) set exactly
+// how many batches of an ore are currently started/pending refining,
+// without needing the full dashboard open - an absolute SET (typed
+// number), not an increment, to match the real workflow: type the count
+// when you start a run, then reset it back to 0 once you've collected the
+// output and are between runs. Same underlying pendingRefining storage key
+// and semantics as the dashboard's own Inventory/Plan a Build tab controls
+// (see tab-inventory.js's applyLocalPendingDeduction(), mirrored here since
+// the overlay has no `app` state to call that against directly).
 async function handleSetPendingBatches(oreName, newBatches) {
   const ore = catalog.findOre(oreName);
   if (!ore || Number.isNaN(newBatches) || newBatches < 0) return;
@@ -307,8 +306,8 @@ async function handleSetPendingBatches(oreName, newBatches) {
 // Chrome - a scrape handler dropped this way silently self-corrects on the
 // next ~2s poll, but a one-off action like setting a batch count has no
 // retry, so losing it here is immediately visible. None of the callers
-// (popup.js/content.js) care about the actual response value, only that the
-// message succeeded - see their own `.catch(() => {})`.
+// (content.js/js/overlay-manifest.js) care about the actual response value,
+// only that the message succeeded - see their own `.catch(() => {})`.
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return undefined;
   let handled;
@@ -316,12 +315,13 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
+  else if (msg.type === "fsc-open-dashboard") handled = handleOpenDashboard();
   else return undefined;
   // sendResponse() itself can throw if the sender's port is already gone
-  // (e.g. the Manifest popup window got closed in the moment between
-  // sending this and the handler finishing) - wrapped so that edge case is
-  // just silently ignored rather than becoming an unhandled rejection, same
-  // as the senders' own `.catch(() => {})` already treats a failed send.
+  // (e.g. the game tab got closed in the moment between sending this and
+  // the handler finishing) - wrapped so that edge case is just silently
+  // ignored rather than becoming an unhandled rejection, same as the
+  // senders' own `.catch(() => {})` already treats a failed send.
   const respond = () => { try { sendResponse(); } catch { /* sender gone, nothing to respond to */ } };
   handled.then(respond).catch(respond);
   return true;

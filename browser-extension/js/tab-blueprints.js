@@ -1,36 +1,39 @@
-// Recipes tab - CRUD editor for Recipe objects (build/item requirement
+// Blueprints tab - CRUD editor for Blueprint objects (build/item requirement
 // lists). Port of gui.py's _build_recipes_tab and its handlers, including
-// the dirty-check-before-discard pattern. Unlike Assembly (which is kept in
-// sync live from the game's Assembler Plans screen - see background.js's
-// handleAssemblerScrape()), Recipes are hand-entered only: an equivalent
+// the dirty-check-before-discard pattern (Python names left as-is - that
+// app is deleted, so this is purely historical lineage; Recipe/AssemblyRecipe
+// were renamed to Blueprint/AssemblyPlan here on 2026-08-15 to match the
+// game's own terminology). Unlike Assembly (which is kept in sync live from
+// the game's Assembler Plans screen - see background.js's
+// handleAssemblerScrape()), Blueprints are hand-entered only: an equivalent
 // import from the game's Item Database category screens (Weapons, Defence,
 // Reactors, etc.) was explored and deliberately shelved as more
 // complicated than it's worth, so there's no scraper feeding this tab.
 
 import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
-import { Recipe } from "./calc-engine.js";
+import { Blueprint } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
-export function initRecipesTab(app, container) {
-  let editingRecipe = null; // name of recipe being edited, or null for new
+export function initBlueprintsTab(app, container) {
+  let editingBlueprint = null; // name of blueprint being edited, or null for new
   let editingRequirements = {}; // itemName -> qty, scratch state until Save
   // Captain Level requirement, when known - display-only stat, never used
   // to gate anything here. In practice this stays null for everything
-  // entered through this tab (Recipes have no live import to populate it
+  // entered through this tab (Blueprints have no live import to populate it
   // from - see the header comment above); it only ever gets a real value
   // via a Settings > Import of previously-exported data that already had
   // one set.
   let editingCaptainLevel = null;
 
-  const recipeSelectLabel = el("label", { for: "recipes-list", class: "visually-hidden", text: "Saved recipes" });
-  const recipeSelect = el("select", { id: "recipes-list", size: "20", class: "list-select" });
+  const blueprintSelectLabel = el("label", { for: "blueprints-list", class: "visually-hidden", text: "Saved blueprints" });
+  const blueprintSelect = el("select", { id: "blueprints-list", size: "20", class: "list-select" });
   // width:auto (overriding the global .field-row label 200px, which other
   // tabs' stacked field-rows rely on for their OWN internal alignment)
-  // plus flex:1 on the input, so "Recipe name:" sits as close to its input
+  // plus flex:1 on the input, so "Blueprint name:" sits as close to its input
   // as "Item:" does below it, and the input stretches out to end at the
   // same right edge as the Add / Update button in the toolbar row below.
-  const nameLabel = el("label", { for: "recipe-name-input", text: "Recipe name:", style: "width: auto; white-space: nowrap;" });
-  const nameInput = el("input", { id: "recipe-name-input", type: "text", placeholder: "Recipe name", style: "flex: 1; min-width: 0;" });
+  const nameLabel = el("label", { for: "blueprint-name-input", text: "Blueprint name:", style: "width: auto; white-space: nowrap;" });
+  const nameInput = el("input", { id: "blueprint-name-input", type: "text", placeholder: "Blueprint name", style: "flex: 1; min-width: 0;" });
   const capLevelInfo = el("div", { class: "status-text" });
   const saveStatus = el("div", { class: "status-text" });
 
@@ -38,22 +41,22 @@ export function initRecipesTab(app, container) {
     capLevelInfo.textContent = editingCaptainLevel != null ? `Captain Level required: ${editingCaptainLevel}` : "";
   }
 
-  // A recipe's own requirements can include an Assembly-produced part as an
-  // ingredient, not just raw/refined catalog items - so that name needs to
-  // be pickable here too. Live callback (not a snapshot), same reasoning as
-  // Plan a Build's own ad-hoc item field: always reflects whatever's
-  // currently in app.assemblyRecipes, including anything just imported from
+  // A blueprint's own requirements can include an Assembly-produced part as
+  // an ingredient, not just raw/refined catalog items - so that name needs
+  // to be pickable here too. Live callback (not a snapshot), same reasoning
+  // as Plan a Build's own ad-hoc item field: always reflects whatever's
+  // currently in app.assemblyPlans, including anything just imported from
   // the Assembler Plans screen.
   function itemCandidates() {
-    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyRecipes)])];
+    return [...new Set([...app.catalog.allItemNames(), ...Object.keys(app.assemblyPlans)])];
   }
-  const itemDatalistId = "recipes-item-datalist";
+  const itemDatalistId = "blueprints-item-datalist";
   const itemDatalist = el("datalist", { id: itemDatalistId }, itemCandidates().map((n) => el("option", { value: n })));
-  const materialLabel = el("label", { for: "recipe-item-input", text: "Item:" });
-  const materialInput = el("input", { id: "recipe-item-input", type: "text", list: itemDatalistId, placeholder: "Start typing to search...", style: "flex: 1; min-width: 0;" });
+  const materialLabel = el("label", { for: "blueprint-item-input", text: "Item:" });
+  const materialInput = el("input", { id: "blueprint-item-input", type: "text", list: itemDatalistId, placeholder: "Start typing to search...", style: "flex: 1; min-width: 0;" });
   enableInlineAutocomplete(materialInput, itemCandidates);
-  const qtyLabel = el("label", { for: "recipe-item-qty-input", text: "Qty:" });
-  const qtyInput = el("input", { id: "recipe-item-qty-input", type: "text", value: "1", style: "width:70px" });
+  const qtyLabel = el("label", { for: "blueprint-item-qty-input", text: "Qty:" });
+  const qtyInput = el("input", { id: "blueprint-item-qty-input", type: "text", value: "1", style: "width:70px" });
 
   const reqTbody = el("tbody");
   const reqTable = el("table", { class: "data-table" }, [
@@ -62,26 +65,26 @@ export function initRecipesTab(app, container) {
   ]);
 
   function savedRequirementsFor(name) {
-    return name && app.recipes[name] ? app.recipes[name].requirements : {};
+    return name && app.blueprints[name] ? app.blueprints[name].requirements : {};
   }
 
   function hasUnsavedChanges() {
-    const saved = savedRequirementsFor(editingRecipe);
-    const nameChanged = editingRecipe !== null && nameInput.value.trim() !== editingRecipe;
+    const saved = savedRequirementsFor(editingBlueprint);
+    const nameChanged = editingBlueprint !== null && nameInput.value.trim() !== editingBlueprint;
     return nameChanged || JSON.stringify(saved) !== JSON.stringify(editingRequirements);
   }
 
   function confirmDiscard() {
     if (!hasUnsavedChanges()) return true;
-    return confirm("Discard unsaved changes to this recipe?");
+    return confirm("Discard unsaved changes to this blueprint?");
   }
 
   function refreshListbox() {
-    clear(recipeSelect);
-    for (const name of Object.keys(app.recipes).sort()) {
-      recipeSelect.appendChild(el("option", { value: name, text: name, selected: name === editingRecipe ? "" : undefined }));
+    clear(blueprintSelect);
+    for (const name of Object.keys(app.blueprints).sort()) {
+      blueprintSelect.appendChild(el("option", { value: name, text: name, selected: name === editingBlueprint ? "" : undefined }));
     }
-    recipeSelect.value = editingRecipe || "";
+    blueprintSelect.value = editingBlueprint || "";
   }
 
   function refreshTree() {
@@ -101,7 +104,7 @@ export function initRecipesTab(app, container) {
   }
 
   function clearEditor() {
-    editingRecipe = null;
+    editingBlueprint = null;
     editingRequirements = {};
     editingCaptainLevel = null;
     nameInput.value = "";
@@ -113,28 +116,28 @@ export function initRecipesTab(app, container) {
     refreshCapLevelInfo();
   }
 
-  function newRecipe() {
+  function newBlueprint() {
     if (!confirmDiscard()) return;
     clearEditor();
   }
 
-  async function deleteRecipe() {
-    if (!editingRecipe) return;
-    if (!confirm(`Delete recipe "${editingRecipe}"?`)) return;
-    delete app.recipes[editingRecipe];
-    await storage.saveRecipes(app.recipes);
+  async function deleteBlueprint() {
+    if (!editingBlueprint) return;
+    if (!confirm(`Delete blueprint "${editingBlueprint}"?`)) return;
+    delete app.blueprints[editingBlueprint];
+    await storage.saveBlueprints(app.blueprints);
     clearEditor();
   }
 
   function loadIntoEditor(name) {
-    if (name === editingRecipe) return;
+    if (name === editingBlueprint) return;
     if (!confirmDiscard()) {
-      recipeSelect.value = editingRecipe || "";
+      blueprintSelect.value = editingBlueprint || "";
       return;
     }
-    editingRecipe = name;
-    editingRequirements = { ...(app.recipes[name]?.requirements || {}) };
-    editingCaptainLevel = app.recipes[name]?.captainLevel ?? null;
+    editingBlueprint = name;
+    editingRequirements = { ...(app.blueprints[name]?.requirements || {}) };
+    editingCaptainLevel = app.blueprints[name]?.captainLevel ?? null;
     nameInput.value = name;
     saveStatus.textContent = "";
     refreshTree();
@@ -166,39 +169,39 @@ export function initRecipesTab(app, container) {
   async function saveEditor() {
     const name = nameInput.value.trim();
     if (!name) {
-      alert("Enter a recipe name.");
+      alert("Enter a blueprint name.");
       return;
     }
     if (Object.keys(editingRequirements).length === 0) {
       alert("Add at least one item requirement.");
       return;
     }
-    const recipe = new Recipe(name);
-    for (const [itemName, qty] of Object.entries(editingRequirements)) recipe.setRequirement(itemName, qty);
-    recipe.captainLevel = editingCaptainLevel;
-    if (editingRecipe && editingRecipe !== name) delete app.recipes[editingRecipe];
-    app.recipes[name] = recipe;
-    await storage.saveRecipes(app.recipes);
-    editingRecipe = name;
+    const blueprint = new Blueprint(name);
+    for (const [itemName, qty] of Object.entries(editingRequirements)) blueprint.setRequirement(itemName, qty);
+    blueprint.captainLevel = editingCaptainLevel;
+    if (editingBlueprint && editingBlueprint !== name) delete app.blueprints[editingBlueprint];
+    app.blueprints[name] = blueprint;
+    await storage.saveBlueprints(app.blueprints);
+    editingBlueprint = name;
     refreshListbox();
-    if (app.refreshHooks.planRecipeCombo) app.refreshHooks.planRecipeCombo();
+    if (app.refreshHooks.planBlueprintCombo) app.refreshHooks.planBlueprintCombo();
     // Inline, non-blocking - unlike the two alert()s above (genuine input
     // errors worth interrupting for), a routine successful save shouldn't
     // make the player click through a dialog every single time.
-    saveStatus.textContent = `Saved recipe "${name}".`;
+    saveStatus.textContent = `Saved blueprint "${name}".`;
     saveStatus.className = "status-text status-ok";
   }
 
-  recipeSelect.addEventListener("change", () => loadIntoEditor(recipeSelect.value));
+  blueprintSelect.addEventListener("change", () => loadIntoEditor(blueprintSelect.value));
 
   container.appendChild(
     el("div", { class: "split-layout" }, [
       el("div", { class: "side-list" }, [
-        recipeSelectLabel,
-        recipeSelect,
+        blueprintSelectLabel,
+        blueprintSelect,
         el("div", { class: "toolbar" }, [
-          el("button", { text: "New", onclick: newRecipe }),
-          el("button", { class: "danger", text: "Delete", onclick: deleteRecipe }),
+          el("button", { text: "New", onclick: newBlueprint }),
+          el("button", { class: "danger", text: "Delete", onclick: deleteBlueprint }),
         ]),
       ]),
       el("div", { class: "detail-panel" }, [
@@ -210,7 +213,7 @@ export function initRecipesTab(app, container) {
         el("div", { class: "scroll-table" }, [reqTable]),
         el("div", { class: "toolbar" }, [
           el("button", { text: "Remove Selected Item", onclick: removeSelected }),
-          el("button", { text: "Save Recipe", onclick: saveEditor }),
+          el("button", { text: "Save Blueprint", onclick: saveEditor }),
         ]),
         saveStatus,
       ]),
@@ -221,10 +224,9 @@ export function initRecipesTab(app, container) {
   refreshTree();
   refreshCapLevelInfo();
 
-  // Refreshes just the saved-recipes list (not the in-progress edit form,
-  // which shouldn't be clobbered mid-edit) when recipes change externally -
-  // e.g. an Assembler Plans import from background.js while this tab is
+  // Refreshes just the saved-blueprints list (not the in-progress edit form,
+  // which shouldn't be clobbered mid-edit) when blueprints change externally
+  // - e.g. an Assembler Plans import from background.js while this tab is
   // already open (see dashboard.js's storage.onChanged listener).
-  app.refreshHooks.recipes = () => refreshListbox();
-  app.unsavedGuards.recipes = hasUnsavedChanges;
+  app.refreshHooks.blueprints = () => refreshListbox();
 }
