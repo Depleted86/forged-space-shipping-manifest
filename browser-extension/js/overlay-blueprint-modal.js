@@ -137,14 +137,27 @@ const STYLE = `
   }
   .fsc-req-list li {
     display: flex;
-    justify-content: space-between;
+    align-items: center;
     gap: 6px;
     padding: 4px 8px;
     border-bottom: 1px solid #1e293b;
     font-size: 12px;
   }
   .fsc-req-list li:last-child { border-bottom: none; }
-  .fsc-req-list button { padding: 1px 6px; font-size: 11px; }
+  .fsc-req-list li span:first-child {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .fsc-req-list li span:nth-child(2) {
+    flex: 0 0 auto;
+    min-width: 3.5em;
+    text-align: right;
+    color: #94a3b8;
+  }
+  .fsc-req-list button { flex: 0 0 auto; padding: 1px 6px; font-size: 11px; }
   .fsc-status {
     font-size: 12px;
     color: #94a3b8;

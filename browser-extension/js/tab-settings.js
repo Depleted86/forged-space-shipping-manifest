@@ -12,6 +12,23 @@ import * as storage from "./storage.js";
 export function initSettingsTab(app, container) {
   const cargoInput = el("input", { type: "text", value: String(app.settings.cargo_capacity) });
   const maxHarvestersInput = el("input", { type: "text", value: String(app.maxHarvesters) });
+
+  // Ore Hold - some ships have one dedicated to raw ore, separate from
+  // general cargo space, so mining/refining trip counts need a different
+  // capacity than everything else uses (see storage.js's has_ore_hold/
+  // ore_hold_capacity comment). The capacity field only makes sense once the
+  // checkbox is checked, so it's hidden rather than just inert when it isn't
+  // - an always-visible-but-ignored number field would be confusing.
+  const hasOreHoldInput = el("input", { type: "checkbox", checked: app.settings.has_ore_hold ? "" : undefined });
+  const oreHoldCapacityInput = el("input", { type: "text", value: String(app.settings.ore_hold_capacity) });
+  const oreHoldCapacityRow = el("div", { class: "field-row", style: app.settings.has_ore_hold ? "" : "display:none" }, [
+    el("label", { text: "Ore Hold capacity per trip:" }),
+    oreHoldCapacityInput,
+  ]);
+  hasOreHoldInput.addEventListener("change", () => {
+    oreHoldCapacityRow.style.display = hasOreHoldInput.checked ? "" : "none";
+  });
+
   const statusText = el("div", { class: "status-text" });
 
   async function save() {
@@ -25,9 +42,19 @@ export function initSettingsTab(app, container) {
       alert("Max harvesters must be a positive whole number.");
       return;
     }
+    let oreHoldCapacity = app.settings.ore_hold_capacity;
+    if (hasOreHoldInput.checked) {
+      oreHoldCapacity = parseFloat(oreHoldCapacityInput.value);
+      if (Number.isNaN(oreHoldCapacity) || oreHoldCapacity <= 0) {
+        alert("Ore Hold capacity must be a positive number.");
+        return;
+      }
+    }
 
     app.settings.cargo_capacity = cargo;
     app.settings.max_harvesters = maxHarvesters;
+    app.settings.has_ore_hold = hasOreHoldInput.checked;
+    app.settings.ore_hold_capacity = oreHoldCapacity;
     await storage.saveSettings(app.settings);
 
     if (maxHarvesters !== app.maxHarvesters) {
@@ -35,7 +62,11 @@ export function initSettingsTab(app, container) {
       app.harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
       if (app.refreshHooks.planets) app.refreshHooks.planets();
     }
-    if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity(cargo);
+    // No-arg - the Plan a Build tab re-derives its own field's label/value/
+    // storage-key from app.settings itself (has_ore_hold, cargo_capacity,
+    // ore_hold_capacity all just got updated above), rather than being
+    // handed a single number that no longer says which setting it belongs to.
+    if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
 
     statusText.textContent = "Settings saved.";
     statusText.className = "status-ok";
@@ -114,9 +145,23 @@ export function initSettingsTab(app, container) {
     setTimeout(() => location.reload(), 800);
   }
 
+  // Only shown the very first time the dashboard is ever opened (see
+  // dashboard.js's bootstrap(), which also lands the user on this tab in
+  // that case) - a nudge to fill in the numbers every trip/mining
+  // calculation across the app depends on before doing anything else.
+  const welcomeHint = app.isFirstLaunch
+    ? el("div", {
+        class: "hint",
+        text: "Welcome! Fill in your cargo capacity (and Ore Hold, if your ship has one) and max harvesters below, then hit Save - these drive every trip and mining calculation across the app.",
+      })
+    : null;
+
   container.appendChild(
     el("div", {}, [
+      welcomeHint,
       el("div", { class: "field-row" }, [el("label", { text: "Cargo capacity per trip:" }), cargoInput]),
+      el("div", { class: "field-row" }, [el("label", { text: "Do you have an Ore Hold?" }), hasOreHoldInput]),
+      oreHoldCapacityRow,
       el("div", { class: "field-row" }, [el("label", { text: "Max harvesters at once:" }), maxHarvestersInput]),
       el("div", { class: "toolbar" }, [el("button", { text: "Save", onclick: save })]),
       statusText,

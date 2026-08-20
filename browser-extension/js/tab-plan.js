@@ -426,8 +426,20 @@ export function initPlanTab(app, container) {
   }
 
   // ============================ Calculate ============================
-  const cargoLabel = el("label", { for: "plan-cargo-input", text: "Cargo capacity:" });
-  const cargoInput = el("input", { id: "plan-cargo-input", type: "text", value: String(app.settings.cargo_capacity) });
+  // Ships with a dedicated Ore Hold (settings.has_ore_hold - see
+  // storage.js's comment) use a different capacity for mining/refining
+  // trips than everything else. This field drives exactly that trip count,
+  // so it needs to track/persist whichever setting is actually in effect -
+  // not stay hardcoded to "Cargo capacity" while silently governed by a
+  // different number underneath, which would be confusing and easy to get
+  // out of sync with what Settings shows.
+  function capacityFieldInfo() {
+    return app.settings.has_ore_hold
+      ? { key: "ore_hold_capacity", label: "Ore Hold capacity:" }
+      : { key: "cargo_capacity", label: "Cargo capacity:" };
+  }
+  const cargoLabel = el("label", { for: "plan-cargo-input", text: capacityFieldInfo().label });
+  const cargoInput = el("input", { id: "plan-cargo-input", type: "text", value: String(app.settings[capacityFieldInfo().key]) });
 
   const resultMatTbody = el("tbody");
   const resultMatTable = el("table", { class: "data-table" }, [
@@ -563,7 +575,7 @@ export function initPlanTab(app, container) {
     }
     const cargoCapacity = parseFloat(cargoInput.value);
     if (Number.isNaN(cargoCapacity) || cargoCapacity <= 0) {
-      alert("Cargo capacity must be a positive number.");
+      alert(`${capacityFieldInfo().label.replace(":", "")} must be a positive number.`);
       return;
     }
 
@@ -580,7 +592,7 @@ export function initPlanTab(app, container) {
         app.settings.ore_choices[item] = ore.name;
       }
     }
-    app.settings.cargo_capacity = cargoCapacity;
+    app.settings[capacityFieldInfo().key] = cargoCapacity;
     await storage.saveSettings(app.settings);
 
     const result = planMining(app.catalog, app.planRequirements, app.inventory, oreChoices, cargoCapacity, harvesterTotals(app.harvesterSlots), app.pendingRefining, assemblyHours);
@@ -618,10 +630,10 @@ export function initPlanTab(app, container) {
     }
     const cargoCapacity = parseFloat(cargoInput.value);
     if (Number.isNaN(cargoCapacity) || cargoCapacity <= 0) {
-      alert("Cargo capacity must be a positive number.");
+      alert(`${capacityFieldInfo().label.replace(":", "")} must be a positive number.`);
       return;
     }
-    app.settings.cargo_capacity = cargoCapacity; // echoed for toStorableToMineData below, not persisted here (matches gui.py's _calculate_all_builds)
+    app.settings[capacityFieldInfo().key] = cargoCapacity; // echoed for toStorableToMineData below, not persisted here (matches gui.py's _calculate_all_builds)
 
     const oreChoices = {};
     for (const [item, oreName] of Object.entries(app.settings.ore_choices || {})) {
@@ -832,7 +844,15 @@ export function initPlanTab(app, container) {
   })();
 
   app.refreshHooks.planBlueprintCombo = refreshPlanBlueprintCombo;
-  app.refreshHooks.planCargoCapacity = (cargo) => { cargoInput.value = String(cargo); };
+  // No-arg - re-derives the field's label AND value from app.settings itself
+  // (has_ore_hold may have just flipped in Settings, not just the number),
+  // rather than being handed a single number that no longer says which
+  // setting it belongs to.
+  app.refreshHooks.planCargoCapacity = () => {
+    const info = capacityFieldInfo();
+    cargoLabel.textContent = info.label;
+    cargoInput.value = String(app.settings[info.key]);
+  };
   app.refreshHooks.plan = async () => {
     renderSyncStatus();
     if (Object.keys(app.planRequirements).length > 0) await calculatePlan();

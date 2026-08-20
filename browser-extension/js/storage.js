@@ -32,6 +32,15 @@ export const DEFAULT_SETTINGS = {
   // rather than personally assemble it - while everything else still mines/
   // assembles normally.
   item_acquisition_mode: {},
+  // Some ships have a dedicated Ore Hold, separate from general cargo space
+  // - raw ore mined goes straight into that instead of the normal cargo
+  // hold. When true, mining/refining trip counts (planMining()/
+  // toStorableToMineData() in calc-engine.js) are computed against
+  // ore_hold_capacity instead of cargo_capacity - everything else (Assembly
+  // items, Corp Store hauling trips) keeps using cargo_capacity exactly as
+  // before, since only raw ore actually goes into the Ore Hold.
+  has_ore_hold: false,
+  ore_hold_capacity: 600,
 };
 
 const KEYS = {
@@ -49,6 +58,10 @@ const KEYS = {
   corpToMineData: "corpToMineData",
   activeCorpBuildName: "activeCorpBuildName",
   corpHaveOverrides: "corpHaveOverrides",
+  dashboardOnboarded: "dashboardOnboarded",
+  manifestSelection: "manifestSelection",
+  manifestToMineData: "manifestToMineData",
+  manifestOreChoices: "manifestOreChoices",
 };
 
 // Pre-2026-08-15 key names, from before Recipe/AssemblyRecipe were renamed
@@ -293,4 +306,72 @@ export async function saveCorpHaveOverrides(haveOverrides) {
 
 export async function saveActiveCorpBuildName(name) {
   await setKey(KEYS.activeCorpBuildName, name);
+}
+
+// Whether the dashboard has ever been opened before - `dashboard.js`'s
+// bootstrap() checks this on load to decide whether to land a first-time
+// user on the Settings tab (so they immediately provide cargo capacity/Ore
+// Hold/max harvesters, which every trip calculation across the app depends
+// on) instead of the usual default tab. Deliberately its OWN storage check,
+// not routed through browser.runtime.onInstalled (background.js's welcome.html
+// splash already uses that, and is documented elsewhere in this project as
+// NOT reliably firing under Firefox's temporary/debug extension loading) -
+// this instead reflects real usage (has the dashboard page itself ever
+// actually loaded), which works regardless of how the extension was loaded.
+export async function loadDashboardOnboarded() {
+  return getKey(KEYS.dashboardOnboarded, false);
+}
+
+export async function saveDashboardOnboarded() {
+  await setKey(KEYS.dashboardOnboarded, true);
+}
+
+// Which Blueprint or Build Order the in-page Manifest overlay's own
+// dropdown (js/overlay-manifest.js) currently has selected -
+// `{ type: "build"|"blueprint", name: string } | null`. Deliberately
+// separate from `activeBuildName` above (the dashboard's Plan a Build tab
+// selection) - the overlay needs to be able to point at a bare Blueprint,
+// which has no equivalent concept in the dashboard's build-tracking model,
+// and keeping the two fully independent avoids the dashboard's own headless
+// recalculation (which only ever knows about saved Builds) silently
+// clobbering an overlay Blueprint preview on the next inventory sync.
+export async function loadManifestSelection() {
+  return getKey(KEYS.manifestSelection, null);
+}
+
+export async function saveManifestSelection(selection) {
+  await setKey(KEYS.manifestSelection, selection);
+}
+
+// The Manifest overlay's own computed plan, in the same shape
+// toStorableToMineData() produces - kept in a key separate from `toMineData`
+// (the dashboard's) for the same reason as manifestSelection above. Consumed
+// by js/overlay-manifest.js's render(), same as `toMineData` used to be.
+export async function loadManifestToMineData() {
+  return getKey(KEYS.manifestToMineData, { available: false });
+}
+
+export async function saveManifestToMineData(data) {
+  await setKey(KEYS.manifestToMineData, data);
+}
+
+// { "<type>:<name>": { materialName: oreName } } - per-selection source-ore
+// preferences for the Manifest overlay's Refined section, keyed by
+// manifestSelectionKey() below. Deliberately per-Blueprint/per-Build-Order
+// rather than global (unlike settings.ore_choices, which the dashboard's
+// Plan a Build tab uses) - the user wants e.g. Build 1 and Build 2 to be
+// able to prefer different source ores for the same shared material without
+// fighting over one global setting.
+export async function loadManifestOreChoices() {
+  return getKey(KEYS.manifestOreChoices, {});
+}
+
+export async function saveManifestOreChoices(choices) {
+  await setKey(KEYS.manifestOreChoices, choices);
+}
+
+// Shared by background.js and overlay-manifest.js so the two never drift on
+// how a selection maps to a manifestOreChoices key.
+export function manifestSelectionKey(selection) {
+  return selection ? `${selection.type}:${selection.name}` : null;
 }

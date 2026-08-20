@@ -29,6 +29,7 @@ export function kindLabel(catalog, name) {
 
 const app = {
   catalog: null,
+  isFirstLaunch: false,
   blueprints: {},
   inventory: null,
   settings: null,
@@ -60,6 +61,12 @@ const app = {
 
 async function bootstrap() {
   app.catalog = new Catalog();
+  // Checked (and immediately marked done) before anything else loads, so a
+  // brand-new install lands on Settings instead of Ore Database - see
+  // storage.js's loadDashboardOnboarded() comment for why this isn't done
+  // via browser.runtime.onInstalled.
+  app.isFirstLaunch = !(await storage.loadDashboardOnboarded());
+  if (app.isFirstLaunch) await storage.saveDashboardOnboarded();
   app.settings = await storage.loadSettings();
   app.maxHarvesters = Number(app.settings.max_harvesters || 4);
   app.blueprints = await storage.loadBlueprints();
@@ -82,7 +89,7 @@ async function bootstrap() {
   initSettingsTab(app, document.getElementById("tab-settings"));
   initAboutTab(app, document.getElementById("tab-about"));
 
-  setupTabSwitching();
+  setupTabSwitching(app.isFirstLaunch ? "settings" : "ore-database");
 
   // Cross-tab / cross-context reactivity: if background.js (or another
   // dashboard tab) writes inventory/blueprints/assemblyPlans/builds while
@@ -150,7 +157,7 @@ async function bootstrap() {
   });
 }
 
-function setupTabSwitching() {
+function setupTabSwitching(defaultTab) {
   const buttons = [...document.querySelectorAll(".tab-btn")];
   const panels = [...document.querySelectorAll(".tab-panel")];
 
@@ -162,7 +169,7 @@ function setupTabSwitching() {
   for (const btn of buttons) {
     btn.addEventListener("click", () => activate(btn.dataset.tab));
   }
-  activate("ore-database");
+  activate(defaultTab);
 }
 
 bootstrap();

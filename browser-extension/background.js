@@ -41,7 +41,7 @@
 import "./js/browser-compat.js";
 import { Catalog } from "./js/catalog.js";
 import { applyItemsToInventory } from "./js/inventory-classify.js";
-import { AssemblyPlan, entriesToTotals, expandCommodities, harvesterTotals, planMining, toStorableCorpData, toStorableToMineData } from "./js/calc-engine.js";
+import { AssemblyPlan, entriesToTotals, expandCommodities, harvesterTotals, itemResourceBreakdown, planMining, toStorableCorpData, toStorableToMineData } from "./js/calc-engine.js";
 import * as storage from "./js/storage.js";
 
 const catalog = new Catalog();
@@ -122,6 +122,7 @@ async function handleStorageScrape(items) {
   await storage.saveInventorySyncStatus({ syncedAt: new Date().toISOString(), matched, unmatched });
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
 }
 
 // items: [{name, quantity}, ...] scraped from the Corp Store panel by
@@ -206,7 +207,11 @@ async function recalculateActiveBuildToMineData() {
   const settings = await storage.loadSettings();
   const maxHarvesters = Number(settings.max_harvesters || 4);
   const harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
-  const cargoCapacity = Number(settings.cargo_capacity || 600);
+  // Raw ore goes straight into a dedicated Ore Hold on ships that have one -
+  // see storage.js's has_ore_hold/ore_hold_capacity comment. Trips for
+  // hauling everything else (Corp Store items - recalculateActiveBuildCorpData()
+  // above) deliberately keep using cargo_capacity unconditionally.
+  const cargoCapacity = Number((settings.has_ore_hold ? settings.ore_hold_capacity : settings.cargo_capacity) || 600);
 
   const totals = entriesToTotals(blueprints, entries);
   const { expanded, assemblyHours } = expandCommodities(catalog, totals, assemblyPlans, inventory, 20, settings.item_acquisition_mode);
@@ -253,6 +258,7 @@ async function handleAssemblerScrape(items) {
   await storage.saveAssemblyPlans(assemblyPlans);
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
 }
 
 // Lets the in-page Manifest overlay (js/overlay-manifest.js) set exactly
@@ -290,6 +296,150 @@ async function handleSetPendingBatches(oreName, newBatches) {
 
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+}
+
+// Recalculates the in-page Manifest overlay's OWN plan (js/overlay-
+// manifest.js), independent of the dashboard's activeBuildName/toMineData -
+// see storage.js's manifestSelection/manifestToMineData/manifestOreChoices
+// header comments for why this is a fully separate pipeline rather than
+// reusing recalculateActiveBuildToMineData() below. Mirrors that function's
+// math almost exactly (same inventory/settings/harvester inputs, same
+// expandCommodities()->planMining()->toStorableToMineData() pipeline), but
+// sources its requirements from whichever Blueprint or Build Order the
+// overlay has selected, and its ore choices from manifestOreChoices (keyed
+// per-selection) instead of the dashboard's global settings.ore_choices.
+async function recalculateManifestSelection() {
+  const selection = await storage.loadManifestSelection();
+  if (!selection) {
+    await storage.saveManifestToMineData({ available: false });
+    return;
+  }
+
+  const blueprints = await storage.loadBlueprints();
+  let totals;
+  if (selection.type === "blueprint") {
+    const blueprint = blueprints[selection.name];
+    if (!blueprint) {
+      await storage.saveManifestToMineData({ available: false });
+      return;
+    }
+    // Always previewed at 1x - confirmed with the user, no quantity input
+    // for a directly-picked Blueprint (unlike Build Orders, which already
+    // carry their own per-entry quantities).
+    totals = blueprint.scaled(1);
+  } else {
+    const builds = await storage.loadBuilds();
+    const entries = builds[selection.name];
+    if (!entries || entries.length === 0) {
+      // Mirrors tab-plan.js's loadBuild(): an empty/nonexistent build must
+      // still positively invalidate the previous plan, not just skip
+      // recalculating over it and leave stale numbers on screen.
+      await storage.saveManifestToMineData({ available: false });
+      return;
+    }
+    totals = entriesToTotals(blueprints, entries);
+  }
+
+  const assemblyPlans = await storage.loadAssemblyPlans();
+  const inventory = await storage.loadInventory(catalog);
+  const pendingRefining = await storage.loadPendingRefining();
+  const settings = await storage.loadSettings();
+  const maxHarvesters = Number(settings.max_harvesters || 4);
+  const harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
+  // See recalculateActiveBuildToMineData()'s identical comment above - same
+  // Ore Hold override, same reasoning.
+  const cargoCapacity = Number((settings.has_ore_hold ? settings.ore_hold_capacity : settings.cargo_capacity) || 600);
+
+  const { expanded, assemblyHours } = expandCommodities(catalog, totals, assemblyPlans, inventory, 20, settings.item_acquisition_mode);
+
+  const manifestOreChoices = await storage.loadManifestOreChoices();
+  const perSelectionChoices = manifestOreChoices[storage.manifestSelectionKey(selection)] || {};
+  const oreChoices = {};
+  for (const [item, oreName] of Object.entries(perSelectionChoices)) {
+    const ore = catalog.findOre(oreName);
+    if (ore) oreChoices[item] = ore;
+  }
+  // Anything not in perSelectionChoices is simply left out of oreChoices -
+  // planMining() already defaults to material.sources[0] on its own, so a
+  // freshly-picked Blueprint/Build works with a sensible default before the
+  // user ever touches an ore selector.
+
+  const result = planMining(catalog, expanded, inventory, oreChoices, cargoCapacity, harvesterTotals(harvesterSlots), pendingRefining, assemblyHours);
+  const stored = toStorableToMineData(result, cargoCapacity);
+  // Every entry in `stored.assembly` is, by construction, a "Farm" item -
+  // expandCommodities() only cascades a commodity into assemblyHours (which
+  // is what populates this array) when it ISN'T buy-moded, and a "Buy" item
+  // lands in `stored.buy` instead. So the Refined-section-style ore/items
+  // breakdown the overlay's Assembly rows show only makes sense here, per
+  // item, using the SAME itemResourceBreakdown() the dashboard's Plan a
+  // Build tab already uses for its "Item sources" sub-item lines - not a
+  // new calculation, just surfaced into a new place.
+  for (const item of stored.assembly) {
+    item.breakdown = itemResourceBreakdown(catalog, item.name, item.need, assemblyPlans, settings.item_acquisition_mode);
+  }
+  // stored.buy mixes two different reasons an item ended up here (see
+  // toStorableToMineData()'s own comment on that array): deliberately
+  // buy-moded, OR no known Assembly Plan exists for it at all. Only the
+  // former can meaningfully switch back to "Farm" - flagging which is which
+  // here so the overlay only offers that toggle where it would actually do
+  // something, rather than a Farm option that silently no-ops because
+  // there's nothing to cascade.
+  for (const item of stored.buy) {
+    item.has_plan = Boolean(assemblyPlans[item.name]);
+  }
+  await storage.saveManifestToMineData(stored);
+}
+
+// Lets the overlay's Assembly/Buy rows toggle an item between "Farm"
+// (cascade it through Assembly into its own ore/material ingredients, same
+// as the dashboard's "Mine" mode) and "Buy" (leave it as a flat quantity to
+// go acquire directly) - the exact same GLOBAL settings.item_acquisition_mode
+// map the dashboard's Plan a Build tab's "Item sources" Mine/Buy select
+// already reads/writes (see tab-plan.js's buildRequirements()), just
+// surfaced as a control here too. Global, not per-selection, unlike
+// manifestOreChoices - the user only asked for ore choices to be scoped per
+// Blueprint/Build Order, not buy/farm mode, and reusing the existing global
+// setting means a choice made here is already exactly what the dashboard
+// would show too, with no new storage needed. Recalculates BOTH the
+// dashboard's own toMineData and this overlay's manifestToMineData since
+// both already read this same global setting (Corp's pipeline doesn't - see
+// recalculateActiveBuildCorpData()'s expandCommodities() call, which omits
+// buyModes entirely - so it's deliberately not recalculated here).
+async function handleSetItemAcquisitionMode(itemName, mode) {
+  if (!itemName || (mode !== "buy" && mode !== "mine")) return;
+  const settings = await storage.loadSettings();
+  settings.item_acquisition_mode = settings.item_acquisition_mode || {};
+  if (mode === "buy") settings.item_acquisition_mode[itemName] = "buy";
+  else delete settings.item_acquisition_mode[itemName];
+  await storage.saveSettings(settings);
+  await recalculateActiveBuildToMineData();
+  await recalculateManifestSelection();
+}
+
+// Lets the in-page Manifest overlay's selector dropdown (see js/overlay-
+// manifest.js) change which Blueprint or Build Order it's showing, without
+// opening the dashboard.
+async function handleSwitchManifestSelection(selection) {
+  if (!selection || !selection.name || (selection.type !== "build" && selection.type !== "blueprint")) return;
+  await storage.saveManifestSelection(selection);
+  await recalculateManifestSelection();
+}
+
+// Lets the overlay's Refined-section ore `<select>` (added per-material,
+// per-selection - see storage.js's manifestOreChoices comment) record a
+// choice and immediately see raw-ore/trip numbers recompute.
+async function handleSetManifestOreChoice(materialName, oreName) {
+  const selection = await storage.loadManifestSelection();
+  if (!selection || !materialName || !oreName) return;
+  const ore = catalog.findOre(oreName);
+  if (!ore) return;
+  const manifestOreChoices = await storage.loadManifestOreChoices();
+  const key = storage.manifestSelectionKey(selection);
+  manifestOreChoices[key] = manifestOreChoices[key] || {};
+  manifestOreChoices[key][materialName] = oreName;
+  await storage.saveManifestOreChoices(manifestOreChoices);
+  await recalculateManifestSelection();
 }
 
 // Returning `true` (and eventually calling sendResponse) - rather than just
@@ -315,6 +465,20 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
+  else if (msg.type === "fsc-switch-manifest-selection") handled = handleSwitchManifestSelection(msg.selection);
+  else if (msg.type === "fsc-set-manifest-ore-choice") handled = handleSetManifestOreChoice(msg.materialName, msg.oreName);
+  else if (msg.type === "fsc-set-item-acquisition-mode") handled = handleSetItemAcquisitionMode(msg.itemName, msg.mode);
+  // Manual refresh button (js/overlay-manifest.js) - recalculateManifestSelection()
+  // only otherwise runs off the 3 scrape/pending-batch triggers above plus
+  // this overlay's own selection/ore-choice/mode changes, so anything
+  // changed purely on the DASHBOARD side (cargo capacity, inventory edited
+  // by hand, a Blueprint/Build Order's contents, assemblyPlans edited
+  // outside the Assembler Plans scraper) has no other path to reach the
+  // overlay's cached manifestToMineData - there's no browser.storage.onChanged
+  // listener here reacting to those keys generally. This is the deliberate,
+  // narrow fix: a manual re-run using whatever's currently in storage, not a
+  // new blanket auto-refresh listener.
+  else if (msg.type === "fsc-refresh-manifest-selection") handled = recalculateManifestSelection();
   else if (msg.type === "fsc-open-dashboard") handled = handleOpenDashboard();
   else return undefined;
   // sendResponse() itself can throw if the sender's port is already gone
