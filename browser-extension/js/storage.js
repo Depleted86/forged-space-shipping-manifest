@@ -53,6 +53,8 @@ const KEYS = {
   builds: "builds",
   toMineData: "toMineData",
   inventorySyncMeta: "inventorySyncMeta",
+  scrapedPlanetTypes: "scrapedPlanetTypes",
+  planetSyncMeta: "planetSyncMeta",
   activeBuildName: "activeBuildName",
   corpInventory: "corpInventory",
   corpToMineData: "corpToMineData",
@@ -62,6 +64,8 @@ const KEYS = {
   manifestSelection: "manifestSelection",
   manifestToMineData: "manifestToMineData",
   manifestOreChoices: "manifestOreChoices",
+  manifestCorpSelection: "manifestCorpSelection",
+  manifestCorpToMineData: "manifestCorpToMineData",
 };
 
 // Pre-2026-08-15 key names, from before Recipe/AssemblyRecipe were renamed
@@ -236,6 +240,36 @@ export async function saveInventorySyncStatus(meta) {
   await setKey(KEYS.inventorySyncMeta, meta);
 }
 
+// { [planetTypeName]: { description, resources: [resourceName, ...] } } -
+// scraped from the in-game Systems Lexicon's Manufacturing > "Planet Types &
+// Resources" panel (see content.js's checkLexiconPlanets()), applied on top
+// of the static PLANET_TYPES baseline (js/planets-data.js) via
+// Catalog.applyScrapedPlanetTypes() rather than replacing it - see that
+// method's comment for why. Additive/merge-only: background.js's
+// handleLexiconPlanetsScrape() only ever adds or refreshes entries here,
+// never removes one that a later scrape happens not to include.
+export async function loadScrapedPlanetTypes() {
+  return getKey(KEYS.scrapedPlanetTypes, {});
+}
+
+export async function saveScrapedPlanetTypes(scraped) {
+  await setKey(KEYS.scrapedPlanetTypes, scraped);
+}
+
+// { syncedAt: ISOString, count: number } - same purpose as
+// inventorySyncMeta above, but for the Planets tab's own sync-status line.
+// Unlike inventory, this sync is player-initiated (opening the Lexicon
+// panel in-game is a deliberate, rare action, not something that happens
+// during normal play) - the Planets tab's hint text tells the player how to
+// trigger it.
+export async function loadPlanetSyncStatus() {
+  return getKey(KEYS.planetSyncMeta, null);
+}
+
+export async function savePlanetSyncStatus(meta) {
+  await setKey(KEYS.planetSyncMeta, meta);
+}
+
 // Which build (by name, matching a key in `builds`) the Plan a Build tab
 // currently has selected, or null for "(unsaved plan)". Persisted (rather
 // than kept only in the dashboard's in-memory `app.activeBuildName`) so
@@ -374,4 +408,30 @@ export async function saveManifestOreChoices(choices) {
 // how a selection maps to a manifestOreChoices key.
 export function manifestSelectionKey(selection) {
   return selection ? `${selection.type}:${selection.name}` : null;
+}
+
+// Corp-view counterparts to manifestSelection/manifestToMineData above - the
+// Manifest overlay's OWN Blueprint/Build Order pick for its Corp view,
+// independent of the dashboard's Corp tab (`activeCorpBuildName`/
+// `corpToMineData`) for the exact same reason the personal ones are
+// independent of activeBuildName/toMineData - see manifestSelection's own
+// comment. No corp equivalent of manifestOreChoices - the Corp view's
+// Refined section has no per-material ore picker (always editable:false,
+// see js/overlay-manifest.js's renderRefinedRow()), so it keeps using the
+// same global settings.ore_choices the dashboard's Corp tab already does -
+// not something this feature changes.
+export async function loadManifestCorpSelection() {
+  return getKey(KEYS.manifestCorpSelection, null);
+}
+
+export async function saveManifestCorpSelection(selection) {
+  await setKey(KEYS.manifestCorpSelection, selection);
+}
+
+export async function loadManifestCorpToMineData() {
+  return getKey(KEYS.manifestCorpToMineData, { available: false, items: [], refined: [] });
+}
+
+export async function saveManifestCorpToMineData(data) {
+  await setKey(KEYS.manifestCorpToMineData, data);
 }

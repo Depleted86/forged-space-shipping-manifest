@@ -98,6 +98,38 @@ export class Catalog {
     }
   }
 
+  // Overlays scraped Systems Lexicon planet-type data (see content.js's
+  // checkLexiconPlanets()) onto an already-built Catalog - additive only,
+  // never removes an existing PlanetType/PlanetResource or a link between
+  // them, since a single scrape isn't guaranteed to see every entry that's
+  // ever existed. `scraped` is { [name]: { description, resources: [name,
+  // ...] } }, the storable shape of storage.js's scrapedPlanetTypes key.
+  // The static PLANET_TYPES import (this Catalog's construction-time
+  // default) stays the guaranteed baseline - this only ever adds to or
+  // refreshes it, so the app works correctly even for a player who's never
+  // opened the Lexicon.
+  applyScrapedPlanetTypes(scraped) {
+    for (const [name, { description, resources }] of Object.entries(scraped || {})) {
+      let planetType = this.planetTypes.get(name);
+      if (!planetType) {
+        planetType = new PlanetType(name, description);
+        this.planetTypes.set(name, planetType);
+      } else {
+        planetType.description = description;
+      }
+      for (const resName of resources) {
+        if (planetType.resources.some((r) => r.name === resName)) continue;
+        let resource = this.planetResources.get(resName);
+        if (!resource) {
+          resource = new PlanetResource(resName);
+          this.planetResources.set(resName, resource);
+        }
+        resource.planetTypes.push(planetType);
+        planetType.resources.push(resource);
+      }
+    }
+  }
+
   findOre(name) {
     return this.ores.get(name) || null;
   }

@@ -15,9 +15,9 @@
 // icon) and the actual panel (hidden until toggled on) - see
 // initManifestOverlay() for both. Rendering itself - renderPersonalRow(),
 // buildBatchControls(), renderRefinedGroups(), etc. - is a near-verbatim
-// port of the old popup.js: same data (toMineData/corpToMineData from
-// browser.storage.local, which content scripts already have direct access
-// to - no messaging round trip needed just to read/write it), same
+// port of the old popup.js: same data (manifestToMineData/manifestCorpToMineData
+// from browser.storage.local, which content scripts already have direct
+// access to - no messaging round trip needed just to read/write it), same
 // suppress-while-editing-a-batch-input guard, same section/sub-label
 // grouping. Only the window-sizing math (resizeToFit()/performResize()) is
 // gone - there's no OS window to size here, just a CSS box.
@@ -25,6 +25,7 @@
 import { openAddBlueprintModal } from "./overlay-blueprint-modal.js";
 import { Catalog } from "./catalog.js";
 import * as storage from "./storage.js";
+import { formatHours } from "./dom-helpers.js";
 
 const MAX_Z_INDEX = 2147483647; // largest valid CSS z-index - guarantees this paints above anything the game's own page sets, regardless of its own stacking contexts
 
@@ -33,6 +34,13 @@ const MAX_Z_INDEX = 2147483647; // largest valid CSS z-index - guarantees this p
 // tooltip - construction is synchronous/cheap (builds static in-memory
 // indices, no I/O), same as background.js's own module-level instance.
 const catalog = new Catalog();
+// Fire-and-forget - overlays whatever's already been scraped from the
+// Systems Lexicon on top of the static baseline (see catalog.js's
+// applyScrapedPlanetTypes() comment). Not re-applied live on further
+// scrapes - this overlay only uses the catalog for material/ore lookups,
+// never planet types directly, so staying fresh as of whenever it was last
+// opened is enough.
+storage.loadScrapedPlanetTypes().then((scraped) => catalog.applyScrapedPlanetTypes(scraped));
 
 let shadowRoot = null;
 let panelEl = null;
@@ -43,14 +51,49 @@ let edgeHandleEl = null;
 let selectionRowEl = null;
 let selectionSelectEl = null;
 let selectionInfoEl = null;
+let corpSelectionRowEl = null;
+let corpSelectionSelectEl = null;
+let corpSelectionInfoEl = null;
+let viewToggleEl = null;
+let addBlueprintBtn = null;
+let dashboardBtn = null;
+let titleEl = null;
+// Set only while an item is focused AND the panel currently has a
+// user-resized (fixed pixel) height - see render()'s "shrink to fit" logic.
+// Restored the instant focus mode ends, so a manual resize (via the corner
+// handles) is never permanently lost just because the user focused
+// something in the meantime.
+let stashedPanelHeight = null;
+// True for the entire time focus mode's chrome (view toggle/Farm rows/
+// header buttons) is hidden - NOT the same thing as `focusedItem` being
+// truthy on any given render() call. The stash-height logic above must only
+// fire on the actual TRANSITION into focus mode, not on every re-render
+// while already there (e.g. the ~2s background inventory sync) - otherwise
+// a resize the user makes WHILE ALREADY focused gets immediately treated as
+// "the old size to restore later" and silently wiped back to natural size
+// on the very next unrelated re-render, which is exactly the "resize
+// stretches fine once but then won't shrink again" bug this flag fixes.
+let focusChromeActive = false;
 
 let currentView = "personal"; // "personal" | "corp"
+// Row-level "focus" - clicking an item in EITHER view hides every other row
+// (across every section, not just its own) so the panel can be shrunk down
+// to show just that one thing, useful on a smaller screen where the full
+// list eats too much space. Works identically in Personal Farm and Corp -
+// see renderFocusedItem()'s two branches. { section, name } | null -
+// `section` disambiguates since names aren't guaranteed unique ACROSS
+// sections (only within one). Not itself tagged with which view set it -
+// simpler to just clear it on every view-toggle click instead (see
+// personalBtn's/corpBtn's own click handlers) than to carry that around and
+// re-check it everywhere.
+let focusedItem = null;
 let personalData = { available: false };
 let corpData = { available: false, items: [] };
 let overlayVisible = false;
 let builds = {}; // buildName -> [[kind, itemName, qty], ...], mirrors storage.js's `builds` key
 let blueprints = {}; // blueprintName -> Blueprint, mirrors storage.js's `blueprints` key
 let manifestSelection = null; // { type: "build"|"blueprint", name: string } | null - see storage.js
+let manifestCorpSelection = null; // Corp-view counterpart - { type: "build"|"blueprint", name: string } | null, see storage.js's manifestCorpSelection
 // render() fully rebuilds the row list on every storage change - live
 // inventory syncs fire every ~2s while the game's storage screen is open,
 // which would otherwise destroy a batch-count <input> mid-type (same class
@@ -112,6 +155,29 @@ const STYLE = `
   }
   .fsc-panel.fsc-visible {
     display: flex;
+  }
+  .fsc-resize-handle {
+    position: absolute;
+    bottom: 1px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    color: #475569;
+    user-select: none;
+    z-index: 1;
+  }
+  .fsc-resize-handle:hover {
+    color: #22d3ee;
+  }
+  .fsc-resize-handle-left {
+    left: 1px;
+    cursor: sw-resize;
+  }
+  .fsc-resize-handle-right {
+    right: 1px;
+    cursor: se-resize;
   }
   .fsc-header {
     flex: 0 0 auto;
@@ -225,11 +291,37 @@ const STYLE = `
     border-color: #22d3ee;
     outline: none;
   }
+  .fsc-row-clickable {
+    cursor: pointer;
+  }
+  .fsc-row-clickable:hover {
+    outline: 1px solid rgba(103, 232, 249, 0.4);
+    outline-offset: -1px;
+  }
+  .fsc-back-btn {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: transparent;
+    color: #67e8f9;
+    border: none;
+    border-bottom: 1px solid #334155;
+    padding: 6px 8px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .fsc-back-btn:hover {
+    color: #e2e8f0;
+  }
   .fsc-view-toggle {
     flex: 0 0 auto;
     display: flex;
     background: #172033;
     border-bottom: 1px solid #334155;
+  }
+  .fsc-view-toggle.fsc-hidden {
+    display: none;
   }
   .fsc-view-toggle button {
     flex: 1 1 0;
@@ -409,8 +501,11 @@ export function initManifestOverlay() {
       personalData = changes.manifestToMineData.newValue || { available: false };
       changed = true;
     }
-    if (changes.corpToMineData) {
-      corpData = changes.corpToMineData.newValue || { available: false, items: [] };
+    // Own key (manifestCorpToMineData), not the dashboard's corpToMineData -
+    // same independence as the Personal side, see storage.js's
+    // manifestCorpSelection comment.
+    if (changes.manifestCorpToMineData) {
+      corpData = changes.manifestCorpToMineData.newValue || { available: false, items: [], refined: [] };
       changed = true;
     }
     // Someone else (the dashboard, or a second overlay on another tab) may
@@ -420,37 +515,47 @@ export function initManifestOverlay() {
     // entry highlighted. builds/blueprints are re-loaded properly (not read
     // raw off `changes`) since they need Blueprint-class hydration for the
     // tooltip's `.requirements` access - see storage.js's loadBuilds()/
-    // loadBlueprints().
+    // loadBlueprints(). Both selectors share the same builds/blueprints
+    // data, just different CURRENT selections, so one refresh call each
+    // covers both dropdowns.
     if (changes.builds) {
       storage.loadBuilds().then((b) => {
         builds = b;
         refreshSelectionSelector();
+        refreshCorpSelectionSelector();
       });
     }
     if (changes.blueprints) {
       storage.loadBlueprints().then((bp) => {
         blueprints = bp;
         refreshSelectionSelector();
+        refreshCorpSelectionSelector();
       });
     }
     if (changes.manifestSelection) {
       manifestSelection = changes.manifestSelection.newValue || null;
       refreshSelectionSelector();
     }
+    if (changes.manifestCorpSelection) {
+      manifestCorpSelection = changes.manifestCorpSelection.newValue || null;
+      refreshCorpSelectionSelector();
+    }
     if (changed && !suppressRenderWhileEditing) render();
   });
 
   Promise.all([
-    browser.storage.local.get(["manifestToMineData", "corpToMineData", "manifestSelection"]),
+    browser.storage.local.get(["manifestToMineData", "manifestCorpToMineData", "manifestSelection", "manifestCorpSelection"]),
     storage.loadBuilds(),
     storage.loadBlueprints(),
   ]).then(([result, loadedBuilds, loadedBlueprints]) => {
     personalData = result.manifestToMineData || { available: false };
-    corpData = result.corpToMineData || { available: false, items: [] };
+    corpData = result.manifestCorpToMineData || { available: false, items: [], refined: [] };
     manifestSelection = result.manifestSelection || null;
+    manifestCorpSelection = result.manifestCorpSelection || null;
     builds = loadedBuilds;
     blueprints = loadedBlueprints;
     refreshSelectionSelector();
+    refreshCorpSelectionSelector();
     render();
   });
 }
@@ -471,11 +576,11 @@ function buildPanel() {
 
   const header = document.createElement("div");
   header.className = "fsc-header";
-  const title = document.createElement("h1");
-  title.textContent = "Manifest";
+  titleEl = document.createElement("h1");
+  titleEl.textContent = "Manifest";
   const actions = document.createElement("div");
   actions.className = "fsc-header-actions";
-  const addBlueprintBtn = document.createElement("button");
+  addBlueprintBtn = document.createElement("button");
   addBlueprintBtn.type = "button";
   addBlueprintBtn.textContent = "Add Blueprint";
   addBlueprintBtn.title = "Quickly add/edit a blueprint or add to your active build, without leaving the game";
@@ -483,7 +588,7 @@ function buildPanel() {
     e.stopPropagation();
     openAddBlueprintModal();
   });
-  const dashboardBtn = document.createElement("button");
+  dashboardBtn = document.createElement("button");
   dashboardBtn.type = "button";
   dashboardBtn.textContent = "Dashboard →";
   dashboardBtn.title = "Open the full dashboard in a new tab";
@@ -501,7 +606,7 @@ function buildPanel() {
     toggleManifestOverlay();
   });
   actions.append(addBlueprintBtn, dashboardBtn, closeBtn);
-  header.append(title, actions);
+  header.append(titleEl, actions);
   makeDraggable(panel, header);
 
   // Selection switcher - lets either a single Blueprint (previewed at 1x)
@@ -566,15 +671,60 @@ function buildPanel() {
 
   selectionRowEl.append(selectionLabel, selectionSelectEl, refreshBtn, selectionInfoEl);
 
-  const viewToggle = document.createElement("div");
-  viewToggle.className = "fsc-view-toggle";
+  // Corp's own Blueprint/Build Order switcher - exact mirror of the
+  // Personal one above (same manifestCorpSelection/manifestCorpToMineData
+  // storage.js pair, same reasoning for staying independent of the
+  // dashboard's Corp tab activeCorpBuildName/corpToMineData), just wired to
+  // the fsc-*-manifest-corp-selection messages instead. Only meaningful for
+  // the Corp view - hidden/shown opposite of selectionRowEl (see
+  // refreshCorpSelectionSelector()'s fsc-hidden toggle below).
+  corpSelectionRowEl = document.createElement("div");
+  corpSelectionRowEl.className = "fsc-selection-row";
+  const corpSelectionLabel = document.createElement("label");
+  corpSelectionLabel.setAttribute("for", "fsc-corp-selection-select");
+  corpSelectionLabel.textContent = "Farm:";
+  corpSelectionSelectEl = document.createElement("select");
+  corpSelectionSelectEl.id = "fsc-corp-selection-select";
+  corpSelectionSelectEl.className = "fsc-selection-select";
+  corpSelectionSelectEl.addEventListener("change", () => {
+    const raw = corpSelectionSelectEl.value;
+    if (!raw) return;
+    const sep = raw.indexOf(":");
+    const type = raw.slice(0, sep);
+    const name = raw.slice(sep + 1);
+    if (manifestCorpSelection && manifestCorpSelection.type === type && manifestCorpSelection.name === name) return;
+    browser.runtime.sendMessage({ type: "fsc-switch-manifest-corp-selection", selection: { type, name } }).catch(() => {});
+  });
+  corpSelectionInfoEl = document.createElement("span");
+  corpSelectionInfoEl.className = "fsc-info-icon";
+  corpSelectionInfoEl.textContent = "i";
+  corpSelectionInfoEl.setAttribute("tabindex", "0");
+  corpSelectionInfoEl.setAttribute("aria-label", "Contents of the selected Blueprint or Build Order");
+
+  const corpRefreshBtn = document.createElement("button");
+  corpRefreshBtn.type = "button";
+  corpRefreshBtn.className = "fsc-refresh-btn";
+  corpRefreshBtn.textContent = "⟳";
+  corpRefreshBtn.title = "Refresh this farm's numbers - use after changing the Corp Store, inventory, or a Blueprint/Build Order in the dashboard";
+  corpRefreshBtn.setAttribute("aria-label", "Refresh corp farm plan");
+  corpRefreshBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    browser.runtime.sendMessage({ type: "fsc-refresh-manifest-corp-selection" }).catch(() => {});
+  });
+
+  corpSelectionRowEl.append(corpSelectionLabel, corpSelectionSelectEl, corpRefreshBtn, corpSelectionInfoEl);
+
+  viewToggleEl = document.createElement("div");
+  viewToggleEl.className = "fsc-view-toggle";
   personalBtn = document.createElement("button");
   personalBtn.type = "button";
   personalBtn.textContent = "Personal Farm";
   personalBtn.setAttribute("aria-pressed", "true");
   personalBtn.addEventListener("click", () => {
     currentView = "personal";
+    focusedItem = null; // a focused item belongs to whichever view set it - see focusedItem's own comment
     refreshSelectionSelector();
+    refreshCorpSelectionSelector();
     render();
   });
   corpBtn = document.createElement("button");
@@ -583,15 +733,46 @@ function buildPanel() {
   corpBtn.setAttribute("aria-pressed", "false");
   corpBtn.addEventListener("click", () => {
     currentView = "corp";
+    focusedItem = null;
     refreshSelectionSelector();
+    refreshCorpSelectionSelector();
     render();
   });
-  viewToggle.append(personalBtn, corpBtn);
+  viewToggleEl.append(personalBtn, corpBtn);
 
   listEl = document.createElement("main");
   listEl.className = "fsc-list";
 
-  panel.append(header, selectionRowEl, viewToggle, listEl);
+  // Both corners, not just one - the panel starts anchored on the right side
+  // of the screen (see its own CSS), where the bottom-LEFT handle is the
+  // natural one (keeps that right-side anchor fixed while growing) - but
+  // once dragged to the left side of the screen instead, the bottom-RIGHT
+  // handle becomes the natural one (keeps the now-relevant left edge fixed).
+  // Having both means whichever side the panel ends up on, there's always a
+  // handle that grows it the "expected" way without also shifting it
+  // sideways first.
+  // Resize grip icon: 3 short parallel diagonal lines, longest nearest the
+  // corner - the standard "resizable panel/textarea" grip look (e.g. seen
+  // in most browsers' own resizable <textarea>) - reads instantly as "drag
+  // here" without needing an arrowhead. Replaced an earlier attempt at a
+  // hand-drawn CSS border-triangle (had a real geometry bug - see project
+  // memory) and then a Unicode double-arrow glyph (user found it visually
+  // unclear) before landing here.
+  const resizeHandleLeft = document.createElement("div");
+  resizeHandleLeft.className = "fsc-resize-handle fsc-resize-handle-left";
+  resizeHandleLeft.appendChild(buildResizeGripIcon(true));
+  resizeHandleLeft.title = "Drag to resize";
+  resizeHandleLeft.setAttribute("aria-hidden", "true"); // mouse-only, like the header's own drag-to-reposition - no keyboard equivalent exists for that either
+  makeResizable(panel, resizeHandleLeft, "left");
+
+  const resizeHandleRight = document.createElement("div");
+  resizeHandleRight.className = "fsc-resize-handle fsc-resize-handle-right";
+  resizeHandleRight.appendChild(buildResizeGripIcon(false));
+  resizeHandleRight.title = "Drag to resize";
+  resizeHandleRight.setAttribute("aria-hidden", "true");
+  makeResizable(panel, resizeHandleRight, "right");
+
+  panel.append(header, selectionRowEl, corpSelectionRowEl, viewToggleEl, listEl, resizeHandleLeft, resizeHandleRight);
   return panel;
 }
 
@@ -607,9 +788,19 @@ function buildPanel() {
 // "the blueprints listed in the build"). For a directly-selected Blueprint
 // there's no "build" to list blueprints from, so it instead lists that
 // Blueprint's own item requirements.
+// Cheap, called from both refresh*SelectionSelector() functions below AND
+// directly from render() on every render (see render()'s own comment) -
+// kept separate from the (much heavier, dropdown-rebuilding) refresh
+// functions so render() doesn't have to redo that work just to keep these
+// two rows' visibility correct after a focus change.
+function updateSelectionRowVisibility() {
+  if (selectionRowEl) selectionRowEl.classList.toggle("fsc-hidden", currentView !== "personal" || Boolean(focusedItem));
+  if (corpSelectionRowEl) corpSelectionRowEl.classList.toggle("fsc-hidden", currentView !== "corp" || Boolean(focusedItem));
+}
+
 function refreshSelectionSelector() {
   if (!selectionSelectEl) return;
-  selectionRowEl.classList.toggle("fsc-hidden", currentView !== "personal");
+  updateSelectionRowVisibility();
 
   selectionSelectEl.innerHTML = "";
   const placeholder = document.createElement("option");
@@ -664,6 +855,67 @@ function refreshSelectionSelector() {
   }
 }
 
+// Corp counterpart to refreshSelectionSelector() above - identical in every
+// way except it reads/writes manifestCorpSelection instead of
+// manifestSelection, and is hidden/shown OPPOSITE that one (visible only in
+// Corp view, not Personal).
+function refreshCorpSelectionSelector() {
+  if (!corpSelectionSelectEl) return;
+  updateSelectionRowVisibility();
+
+  corpSelectionSelectEl.innerHTML = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "-- Select --";
+  corpSelectionSelectEl.appendChild(placeholder);
+
+  const blueprintNames = Object.keys(blueprints).sort();
+  if (blueprintNames.length > 0) {
+    const group = document.createElement("optgroup");
+    group.label = "Blueprints";
+    for (const name of blueprintNames) {
+      const opt = document.createElement("option");
+      opt.value = `blueprint:${name}`;
+      opt.textContent = name;
+      group.appendChild(opt);
+    }
+    corpSelectionSelectEl.appendChild(group);
+  }
+
+  const buildNames = Object.keys(builds).sort((a, b) => Number(a) - Number(b));
+  if (buildNames.length > 0) {
+    const group = document.createElement("optgroup");
+    group.label = "Build Orders (Dashboard)";
+    for (const name of buildNames) {
+      const opt = document.createElement("option");
+      opt.value = `build:${name}`;
+      opt.textContent = `Build ${name}`;
+      group.appendChild(opt);
+    }
+    corpSelectionSelectEl.appendChild(group);
+  }
+
+  corpSelectionSelectEl.value = manifestCorpSelection ? `${manifestCorpSelection.type}:${manifestCorpSelection.name}` : "";
+
+  if (manifestCorpSelection?.type === "blueprint") {
+    const blueprint = blueprints[manifestCorpSelection.name];
+    const lines = blueprint
+      ? Object.entries(blueprint.requirements)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, qty]) => `${name} x${qty}`)
+      : [];
+    corpSelectionInfoEl.title = lines.length ? `Items in this blueprint:\n${lines.join("\n")}` : "No items in this blueprint.";
+  } else if (manifestCorpSelection?.type === "build") {
+    const entries = builds[manifestCorpSelection.name] || [];
+    const lines = entries
+      .filter(([kind]) => kind === "blueprint" || kind === "recipe")
+      .map(([, name, qty]) => `${name} x${qty}`);
+    corpSelectionInfoEl.title = lines.length ? `Blueprints in this build:\n${lines.join("\n")}` : "No blueprints in this build.";
+  } else {
+    corpSelectionInfoEl.title = "Pick a Blueprint or Build Order to see its contents.";
+  }
+}
+
 // Drag-to-reposition via the header - position:fixed + left/top, switching
 // away from right/top-anchored placement to left/top-anchored the moment a
 // drag starts (so the panel doesn't visually jump the instant it's grabbed
@@ -702,10 +954,107 @@ function makeDraggable(panel, handle) {
   });
 }
 
+// Builds the resize-grip SVG icon: 3 parallel diagonal line segments,
+// shortest furthest from the corner, longest right at it. `mirrored: true`
+// draws them NE-to-SW (for the bottom-LEFT handle, matching its sw-resize
+// cursor); `false` draws NW-to-SE (bottom-RIGHT, se-resize). Built via
+// createElementNS rather than innerHTML - this file/project's convention
+// throughout (see dom-helpers.js's own header comment) is to never set
+// markup via innerHTML, even for static/trusted strings like this one.
+function buildResizeGripIcon(mirrored) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("width", "14");
+  svg.setAttribute("height", "14");
+  const segments = mirrored
+    ? [[12, 14, 2, 4], [8, 14, 2, 8], [4, 14, 2, 12]]
+    : [[4, 14, 14, 4], [8, 14, 14, 8], [12, 14, 14, 12]];
+  for (const [x1, y1, x2, y2] of segments) {
+    const line = document.createElementNS(NS, "line");
+    line.setAttribute("x1", x1);
+    line.setAttribute("y1", y1);
+    line.setAttribute("x2", x2);
+    line.setAttribute("y2", y2);
+    line.setAttribute("stroke", "currentColor");
+    line.setAttribute("stroke-width", "1.5");
+    line.setAttribute("stroke-linecap", "round");
+    svg.appendChild(line);
+  }
+  return svg;
+}
+
+// Drag-to-resize from a bottom corner. Two handles share this (see
+// buildPanel()) since which corner is "natural" depends on which side of
+// the screen the panel is currently sitting on: `corner: "left"` keeps the
+// RIGHT edge fixed while growing (right for a panel still in its default
+// right-anchored spot), `corner: "right"` keeps the LEFT edge fixed instead
+// (right for a panel that's been dragged over to the left side of the
+// screen). Same "switch to left/top+explicit size the moment the
+// interaction starts" trick as makeDraggable() above - the panel's default
+// `width: fit-content`/`max-width`/`max-height` (its own CSS) only apply
+// until an explicit inline width/height/right:auto is set, at which point
+// they stop constraining it, matching how makeDraggable() already
+// overrides `right` the same way.
+function makeResizable(panel, handle, corner) {
+  let resizing = false;
+  let startX = 0;
+  let startY = 0;
+  let startLeft = 0;
+  let startTop = 0;
+  let startWidth = 0;
+  let startHeight = 0;
+  const MIN_WIDTH = 280; // matches the CSS min-width this replaces once resizing starts
+  const MIN_HEIGHT = 220; // enough room for the header/selection row/view toggle plus at least one list row
+
+  handle.addEventListener("mousedown", (e) => {
+    resizing = true;
+    const rect = panel.getBoundingClientRect();
+    panel.style.right = "auto";
+    panel.style.left = `${rect.left}px`;
+    panel.style.top = `${rect.top}px`;
+    panel.style.maxWidth = "none";
+    panel.style.maxHeight = "none";
+    startX = e.clientX;
+    startY = e.clientY;
+    startLeft = rect.left;
+    startTop = rect.top;
+    startWidth = rect.width;
+    startHeight = rect.height;
+    e.preventDefault();
+    e.stopPropagation(); // don't also let the panel's own drag (header) or anything else react to this
+  });
+  document.addEventListener("mousemove", (e) => {
+    if (!resizing) return;
+    const deltaX = e.clientX - startX;
+    const deltaY = e.clientY - startY;
+    const maxHeight = window.innerHeight - startTop - 10;
+    const height = Math.min(Math.max(MIN_HEIGHT, startHeight + deltaY), maxHeight);
+    panel.style.height = `${height}px`;
+    if (corner === "left") {
+      // The RIGHT edge (startLeft + startWidth) stays fixed - only the left
+      // edge (tracking the mouse) moves.
+      const maxWidth = startLeft + startWidth - 10; // don't let the left edge cross past 10px from the viewport's own left edge
+      const width = Math.min(Math.max(MIN_WIDTH, startWidth - deltaX), maxWidth);
+      panel.style.left = `${startLeft + startWidth - width}px`;
+      panel.style.width = `${width}px`;
+    } else {
+      // The LEFT edge (startLeft) stays fixed - only the right edge
+      // (tracking the mouse) moves, so `left` itself never needs to change.
+      const maxWidth = window.innerWidth - startLeft - 10; // don't let the right edge cross past 10px from the viewport's own right edge
+      const width = Math.min(Math.max(MIN_WIDTH, startWidth + deltaX), maxWidth);
+      panel.style.width = `${width}px`;
+    }
+  });
+  document.addEventListener("mouseup", () => {
+    resizing = false;
+  });
+}
+
 function emptyMessage() {
   if (currentView === "corp") {
     if (!corpData.available) {
-      return "No corp build selected - pick one on the dashboard's Corp tab";
+      return "Pick a Blueprint or Build Order above to see what's needed";
     }
     return "Corp Store already covers everything needed";
   }
@@ -719,18 +1068,56 @@ function setPendingBatches(oreName, batches) {
   browser.runtime.sendMessage({ type: "fsc-set-pending-batches", oreName, batches }).catch(() => {});
 }
 
+// Row-level "focus" click - see focusedItem's own declaration comment.
+// Shared by all 5 focusable row types (ore/refined/assembly/planetary/buy).
+// Toggling (not just setting) is what makes "click the same row again"
+// exit focus mode work, with no special-casing needed in render() - the
+// focused view reuses these exact same render*Row() functions, so the
+// click listener attached here fires identically whether the row is
+// currently shown as part of the full list or as the sole focused row.
+function isFocused(section, name) {
+  return focusedItem !== null && focusedItem.section === section && focusedItem.name === name;
+}
+
+function toggleFocus(section, name) {
+  focusedItem = isFocused(section, name) ? null : { section, name };
+  render();
+}
+
 // Mining/ores is the TOTAL raw ore still needed (direct use + refining
 // combined - see toStorableToMineData() in calc-engine.js). The refining
-// share of THIS row's total is called out inline - "(refined: N)" - so the
-// connection to the Refined section below is obvious without cross-
-// referencing.
+// share of THIS row's total used to be called out inline - "(refined: N)" -
+// but that made rows noisy/hard to parse at a glance; now it's a small info
+// icon (only shown when there IS a refining share) whose tooltip carries
+// the number instead, pointing at the Refined section below rather than
+// repeating its detail inline.
 function renderPersonalRow(ore) {
   const row = document.createElement("div");
-  row.className = "fsc-row";
+  row.addEventListener("click", () => toggleFocus("ore", ore.name));
   const tripLabel = ore.trips === 1 ? "trip" : "trips";
-  const refinedText = ore.refined_portion > 0 ? ` (refined: ${Math.round(ore.refined_portion).toLocaleString()})` : "";
-  row.textContent = `${ore.name}: ${Math.round(ore.to_mine).toLocaleString()}${refinedText} (${ore.trips} ${tripLabel})`;
-  row.title = `${row.textContent} — Law ${ore.law}`;
+  const labelText = `${ore.name}: ${Math.round(ore.to_mine).toLocaleString()} (${ore.trips} ${tripLabel})`;
+  const titleText = `${labelText} — Law ${ore.law}`;
+
+  if (ore.refined_portion <= 0) {
+    row.className = "fsc-row fsc-row-clickable";
+    row.textContent = labelText;
+    row.title = titleText;
+    return row;
+  }
+
+  row.className = "fsc-row fsc-row-flex fsc-row-clickable";
+  const label = document.createElement("span");
+  label.textContent = labelText;
+  label.title = titleText;
+
+  const infoIcon = document.createElement("span");
+  infoIcon.className = "fsc-info-icon";
+  infoIcon.textContent = "i";
+  infoIcon.setAttribute("tabindex", "0");
+  infoIcon.setAttribute("aria-label", "Part of this ore is needed for refining - see Refined Materials");
+  infoIcon.title = `${Math.round(ore.refined_portion).toLocaleString()} of this is needed for refining — see Refined Materials below`;
+
+  row.append(label, infoIcon);
   return row;
 }
 
@@ -818,13 +1205,20 @@ function renderRefinedRow(item, oreName, editable) {
   const titleText = `${item.name}: have ${item.have} / need ${item.need}`;
 
   if (!editable) {
-    row.className = "fsc-row";
+    // Corp's own Refined section reuses this same function with
+    // editable:false (see renderRefinedGroups()'s default param, and its
+    // only two call sites in render() below - editable is always true for
+    // Personal, always false for Corp, a clean 1:1 split) - no ore picker
+    // here, but focus mode still applies the same as everywhere else.
+    row.addEventListener("click", () => toggleFocus("refined", item.name));
+    row.className = "fsc-row fsc-row-clickable";
     row.textContent = labelText;
     row.title = titleText;
     return row;
   }
 
-  row.className = "fsc-row fsc-row-flex";
+  row.addEventListener("click", () => toggleFocus("refined", item.name));
+  row.className = "fsc-row fsc-row-flex fsc-row-clickable";
   const label = document.createElement("span");
   label.textContent = labelText;
   label.title = titleText;
@@ -917,8 +1311,9 @@ function renderAssemblyBreakdownRow(sub) {
 // render once background.js's recalculation lands.
 function renderAssemblyRow(item) {
   const row = document.createElement("div");
-  row.className = "fsc-row fsc-assembly-row fsc-row-flex";
-  const hoursText = item.hours != null ? `${item.hours}h` : "rate unknown";
+  row.addEventListener("click", () => toggleFocus("assembly", item.name));
+  row.className = "fsc-row fsc-assembly-row fsc-row-flex fsc-row-clickable";
+  const hoursText = item.hours != null ? formatHours(item.hours) : "rate unknown";
   const label = document.createElement("span");
   label.textContent = `${item.name}: ${Math.round(item.need).toLocaleString()} (${hoursText})`;
   label.title = label.textContent;
@@ -928,8 +1323,9 @@ function renderAssemblyRow(item) {
 
 function renderPlanetaryRow(item) {
   const row = document.createElement("div");
-  row.className = "fsc-row fsc-planetary-row";
-  const hoursText = item.hours != null ? `${item.hours}h` : "idle";
+  row.addEventListener("click", () => toggleFocus("planetary", item.name));
+  row.className = "fsc-row fsc-planetary-row fsc-row-clickable";
+  const hoursText = item.hours != null ? formatHours(item.hours) : "idle";
   row.textContent = `${item.name}: ${Math.round(item.need).toLocaleString()} (${hoursText})`;
   row.title = row.textContent;
   return row;
@@ -989,7 +1385,12 @@ function renderCorpPlanetaryGroups(items) {
 
 function renderCorpRow(item) {
   const row = document.createElement("div");
-  row.className = "fsc-row";
+  // item.category ("ore"|"assembly"|"planetary", falling back to
+  // "commodity" for anything else) is the same categorization render()
+  // itself already uses to bucket corpData.items - reused directly as the
+  // focus section key so no separate section param is needed here.
+  row.addEventListener("click", () => toggleFocus(item.category || "commodity", item.name));
+  row.className = "fsc-row fsc-row-clickable";
   const shortfallText = Math.round(item.shortfall).toLocaleString();
   if (item.kind === "ore") {
     const tripLabel = item.trips === 1 ? "trip" : "trips";
@@ -1008,16 +1409,17 @@ function renderCorpRow(item) {
 // would just silently stay in Buy anyway since there's nothing to cascade).
 function renderBuyRow(item) {
   const row = document.createElement("div");
+  row.addEventListener("click", () => toggleFocus("buy", item.name));
   const label = document.createElement("span");
   label.textContent = `${item.name}: ${Math.round(item.need).toLocaleString()}`;
   label.title = label.textContent;
   if (!item.has_plan) {
-    row.className = "fsc-row";
+    row.className = "fsc-row fsc-row-clickable";
     row.textContent = label.textContent;
     row.title = label.textContent;
     return row;
   }
-  row.className = "fsc-row fsc-row-flex";
+  row.className = "fsc-row fsc-row-flex fsc-row-clickable";
   row.append(label, renderModeSelect(item.name, "buy"));
   return row;
 }
@@ -1042,10 +1444,139 @@ function renderSections(sections) {
   }
 }
 
+// Finds focusedItem's underlying data in whichever of personalData/corpData
+// matches the CURRENT view and appends just that one row (plus, for a
+// Personal Assembly item, its breakdown sub-rows, same as the full list
+// would) - reuses the exact same render*Row() functions the full list uses,
+// so a focused row looks and behaves identically to its full-list
+// counterpart (including its own click-to-toggle-off listener). Returns
+// false if the item can't be found anymore (e.g. fully satisfied and
+// dropped from the plan by the latest recalculation) - render() falls back
+// to the normal full list in that case rather than leaving focus mode stuck
+// on a vanished item.
+function renderFocusedItem() {
+  const { section, name } = focusedItem;
+
+  if (currentView === "corp") {
+    if (section === "refined") {
+      for (const group of corpData.refined || []) {
+        const item = (group.materials || []).find((m) => m.name === name);
+        if (item) {
+          listEl.appendChild(renderRefinedRow(item, group.ore, false));
+          return true;
+        }
+      }
+      return false;
+    }
+    // Every other Corp section (ore/assembly/planetary/commodity) is a flat
+    // renderCorpRow() keyed by item.category - see that function's own
+    // comment on why category doubles as the section key here.
+    const item = (corpData.items || []).find((i) => (i.category || "commodity") === section && i.name === name);
+    if (!item) return false;
+    listEl.appendChild(renderCorpRow(item));
+    return true;
+  }
+
+  if (section === "ore") {
+    const ore = (personalData.ores || []).find((o) => o.name === name);
+    if (!ore) return false;
+    listEl.appendChild(renderPersonalRow(ore));
+    return true;
+  }
+  if (section === "refined") {
+    for (const group of personalData.refined || []) {
+      const item = (group.materials || []).find((m) => m.name === name);
+      if (item) {
+        listEl.appendChild(renderRefinedRow(item, group.ore, true));
+        return true;
+      }
+    }
+    return false;
+  }
+  if (section === "assembly") {
+    const item = (personalData.assembly || []).find((i) => i.name === name);
+    if (!item) return false;
+    listEl.appendChild(renderAssemblyRow(item));
+    (item.breakdown || []).forEach((sub) => listEl.appendChild(renderAssemblyBreakdownRow(sub)));
+    return true;
+  }
+  if (section === "planetary") {
+    const item = (personalData.planetary || []).find((i) => i.name === name);
+    if (!item) return false;
+    listEl.appendChild(renderPlanetaryRow(item));
+    return true;
+  }
+  if (section === "buy") {
+    const item = (personalData.buy || []).find((i) => i.name === name);
+    if (!item) return false;
+    listEl.appendChild(renderBuyRow(item));
+    return true;
+  }
+  return false;
+}
+
 function render() {
   listEl.innerHTML = "";
   personalBtn.setAttribute("aria-pressed", String(currentView === "personal"));
   corpBtn.setAttribute("aria-pressed", String(currentView === "corp"));
+
+  if (focusedItem) {
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "fsc-back-btn";
+    backBtn.textContent = "← All items";
+    backBtn.addEventListener("click", () => {
+      focusedItem = null;
+      render();
+    });
+    listEl.appendChild(backBtn);
+    if (renderFocusedItem()) {
+      // Down to just "Manifest" + the close button, the back link, and the
+      // one focused row - the Personal Farm/Corp toggle, whichever Farm
+      // selector row is showing, and the Add Blueprint/Dashboard header
+      // buttons all add nothing useful once you're already looking at a
+      // single item (updateSelectionRowVisibility() checks focusedItem
+      // itself, same as this).
+      viewToggleEl.classList.add("fsc-hidden");
+      addBlueprintBtn.style.display = "none";
+      dashboardBtn.style.display = "none";
+      titleEl.textContent = "Manifest (focused)";
+      updateSelectionRowVisibility();
+      // Stash-and-clear a fixed height ONLY on the actual transition into
+      // focus mode (focusChromeActive was false coming in) - if the panel
+      // was previously resized to a fixed height (drag handles - see
+      // makeResizable()), that height would otherwise leave a lot of dead
+      // space below one row, so let it shrink to fit instead. Guarding on
+      // focusChromeActive (not just re-checking panelEl.style.height) is
+      // what stops this from re-firing on every subsequent re-render while
+      // ALREADY focused (e.g. the ~2s background inventory sync) - without
+      // it, a resize made WHILE focused would look like a stale height to
+      // restore later and get wiped on the very next unrelated render().
+      if (!focusChromeActive) {
+        if (panelEl.style.height) {
+          stashedPanelHeight = panelEl.style.height;
+          panelEl.style.height = "";
+        }
+        focusChromeActive = true;
+      }
+      return;
+    }
+    focusedItem = null; // vanished since it was focused - fall through to the normal full list below
+    listEl.innerHTML = "";
+  }
+
+  viewToggleEl.classList.remove("fsc-hidden");
+  addBlueprintBtn.style.display = "";
+  dashboardBtn.style.display = "";
+  titleEl.textContent = "Manifest";
+  updateSelectionRowVisibility();
+  if (focusChromeActive) {
+    if (stashedPanelHeight !== null) {
+      panelEl.style.height = stashedPanelHeight;
+      stashedPanelHeight = null;
+    }
+    focusChromeActive = false;
+  }
 
   if (currentView === "corp") {
     const byCategory = { ore: [], assembly: [], planetary: [], commodity: [] };

@@ -45,6 +45,12 @@ import { AssemblyPlan, entriesToTotals, expandCommodities, harvesterTotals, item
 import * as storage from "./js/storage.js";
 
 const catalog = new Catalog();
+// Fire-and-forget - applies whatever's already been scraped from the
+// Systems Lexicon on top of the static baseline (see catalog.js's
+// applyScrapedPlanetTypes() comment). A message arriving in the brief
+// window before this resolves would just see the static baseline, same as
+// before this feature existed - not worth blocking message handling on.
+storage.loadScrapedPlanetTypes().then((scraped) => catalog.applyScrapedPlanetTypes(scraped));
 
 // One-time permission/privacy disclaimer, shown as a new tab the first time
 // the extension is installed - NOT on every browser start or on updates
@@ -123,6 +129,7 @@ async function handleStorageScrape(items) {
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
   await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
 }
 
 // items: [{name, quantity}, ...] scraped from the Corp Store panel by
@@ -138,6 +145,7 @@ async function handleCorpStoreScrape(items) {
   }
   await storage.saveCorpInventory(corpInventory);
   await recalculateActiveBuildCorpData();
+  await recalculateManifestCorpSelection();
 }
 
 // Corp-store counterpart to recalculateActiveBuildToMineData() above, kept
@@ -179,6 +187,73 @@ async function recalculateActiveBuildCorpData() {
   const totals = entriesToTotals(blueprints, entries);
   const { expanded } = expandCommodities(catalog, totals, assemblyPlans, { other: corpInventory });
   await storage.saveCorpToMineData(toStorableCorpData(catalog, assemblyPlans, oreChoices, expanded, corpInventory, cargoCapacity, corpHaveOverrides));
+}
+
+// Corp-view counterpart to recalculateManifestSelection() below, mirroring
+// this function's own math almost exactly (same corp inventory/settings
+// inputs, same expandCommodities()->toStorableCorpData() pipeline), but
+// sourcing requirements from whichever Blueprint or Build Order the
+// overlay's OWN Corp-view dropdown has selected (storage.js's
+// manifestCorpSelection) instead of the dashboard Corp tab's
+// activeCorpBuildName - independent for the exact same reason
+// recalculateManifestSelection() is independent of the dashboard's Plan a
+// Build tab (see manifestCorpSelection's own storage.js comment). Still
+// uses the GLOBAL settings.ore_choices, same as
+// recalculateActiveBuildCorpData() above - no per-selection ore choices for
+// Corp, since its Refined section has no ore picker at all (see
+// storage.js's manifestCorpSelection comment for why).
+async function recalculateManifestCorpSelection() {
+  const selection = await storage.loadManifestCorpSelection();
+  if (!selection) {
+    await storage.saveManifestCorpToMineData({ available: false, items: [], refined: [] });
+    return;
+  }
+
+  const blueprints = await storage.loadBlueprints();
+  let totals;
+  if (selection.type === "blueprint") {
+    const blueprint = blueprints[selection.name];
+    if (!blueprint) {
+      await storage.saveManifestCorpToMineData({ available: false, items: [], refined: [] });
+      return;
+    }
+    // Always previewed at 1x - same as the personal selector's Blueprint
+    // mode, confirmed with the user there, no reason for Corp to differ.
+    totals = blueprint.scaled(1);
+  } else {
+    const builds = await storage.loadBuilds();
+    const entries = builds[selection.name];
+    if (!entries || entries.length === 0) {
+      await storage.saveManifestCorpToMineData({ available: false, items: [], refined: [] });
+      return;
+    }
+    totals = entriesToTotals(blueprints, entries);
+  }
+
+  const assemblyPlans = await storage.loadAssemblyPlans();
+  const corpInventory = await storage.loadCorpInventory();
+  const corpHaveOverrides = await storage.loadCorpHaveOverrides();
+  const settings = await storage.loadSettings();
+  const cargoCapacity = Number(settings.cargo_capacity || 600);
+
+  const oreChoices = {};
+  for (const [item, oreName] of Object.entries(settings.ore_choices || {})) {
+    const ore = catalog.findOre(oreName);
+    if (ore) oreChoices[item] = ore;
+  }
+
+  const { expanded } = expandCommodities(catalog, totals, assemblyPlans, { other: corpInventory });
+  await storage.saveManifestCorpToMineData(toStorableCorpData(catalog, assemblyPlans, oreChoices, expanded, corpInventory, cargoCapacity, corpHaveOverrides));
+}
+
+// Lets the in-page Manifest overlay's Corp-view selector dropdown (see
+// js/overlay-manifest.js) change which Blueprint or Build Order it's
+// tracking, without opening the dashboard - mirrors
+// handleSwitchManifestSelection() below exactly, just for the Corp pipeline.
+async function handleSwitchManifestCorpSelection(selection) {
+  if (!selection || !selection.name || (selection.type !== "build" && selection.type !== "blueprint")) return;
+  await storage.saveManifestCorpSelection(selection);
+  await recalculateManifestCorpSelection();
 }
 
 // The previously-calculated plan (toMineData) was computed against the OLD
@@ -259,6 +334,27 @@ async function handleAssemblerScrape(items) {
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
   await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
+// items: [{name, description, resources}] scraped from the in-game Systems
+// Lexicon's Manufacturing > "Planet Types & Resources" panel by content.js.
+// Merges into the persisted scrapedPlanetTypes overlay (additive/refresh
+// only - see storage.js's own comment on that key) and applies it to this
+// module's shared `catalog` so every recalculation function immediately
+// sees any newly-scraped planet type. No recalculation triggered here - a
+// new/changed planet type can't retroactively change an existing build's
+// requirements, and every recalculate*() function already shares this same
+// `catalog` instance, so it's simply current the next time any of them run.
+async function handleLexiconPlanetsScrape(planetTypes) {
+  const scraped = await storage.loadScrapedPlanetTypes();
+  for (const item of planetTypes || []) {
+    if (!item || !item.name || !item.resources || item.resources.length === 0) continue;
+    scraped[item.name] = { description: item.description || "", resources: item.resources };
+  }
+  await storage.saveScrapedPlanetTypes(scraped);
+  await storage.savePlanetSyncStatus({ syncedAt: new Date().toISOString(), count: Object.keys(scraped).length });
+  catalog.applyScrapedPlanetTypes(scraped);
 }
 
 // Lets the in-page Manifest overlay (js/overlay-manifest.js) set exactly
@@ -297,6 +393,7 @@ async function handleSetPendingBatches(oreName, newBatches) {
   await recalculateActiveBuildToMineData();
   await recalculateActiveBuildCorpData();
   await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
 }
 
 // Recalculates the in-page Manifest overlay's OWN plan (js/overlay-
@@ -464,10 +561,13 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items);
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
+  else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
   else if (msg.type === "fsc-switch-manifest-selection") handled = handleSwitchManifestSelection(msg.selection);
   else if (msg.type === "fsc-set-manifest-ore-choice") handled = handleSetManifestOreChoice(msg.materialName, msg.oreName);
   else if (msg.type === "fsc-set-item-acquisition-mode") handled = handleSetItemAcquisitionMode(msg.itemName, msg.mode);
+  else if (msg.type === "fsc-switch-manifest-corp-selection") handled = handleSwitchManifestCorpSelection(msg.selection);
+  else if (msg.type === "fsc-refresh-manifest-corp-selection") handled = recalculateManifestCorpSelection();
   // Manual refresh button (js/overlay-manifest.js) - recalculateManifestSelection()
   // only otherwise runs off the 3 scrape/pending-batch triggers above plus
   // this overlay's own selection/ore-choice/mode changes, so anything

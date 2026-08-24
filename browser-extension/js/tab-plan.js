@@ -14,14 +14,10 @@
 // moved to calc-engine.js (2026-08-09) so background.js can import them for
 // headless recalculation - see recalculateActiveBuildToMineData() there.
 
-import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
+import { el, clear, selectableRow, enableInlineAutocomplete, formatHours } from "./dom-helpers.js";
 import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown } from "./calc-engine.js";
 import * as storage from "./storage.js";
 import { applyLocalPendingDeduction } from "./tab-inventory.js";
-
-function formatHours(hours) {
-  return `${hours.toFixed(1)}h (${(hours / 24).toFixed(1)} days)`;
-}
 
 // list of [oreName, batches] for every pending-refining ore whose outputs
 // include `materialName`. Port of gui.py's _pending_credit_contributors.

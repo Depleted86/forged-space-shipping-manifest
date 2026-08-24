@@ -16,4 +16,6 @@ export const PLANET_TYPES = [
     ["Halon Mist", "Auric Gas", "Zephyr Flux", "Hydra Gas"]],
   ["Ocean World", "Vast Ocean worlds with aquatic deposits.",
     ["Hydrosilicates", "Nautilene Fibers", "Kelp Resin", "Coralite Nodules"]],
+  ["Toxic", "Toxic Worlds with varied Gases and rare highly toxic elements.",
+    ["Decaystone", "Toxmetal Deposits", "Mutagen Gel", "Chloracite Ore"]],
 ];

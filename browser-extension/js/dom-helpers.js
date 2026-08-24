@@ -4,6 +4,15 @@
 // innerHTML, so scraped/externally-sourced names can never be interpreted
 // as markup (see the XSS guardrail note in the migration plan).
 
+// "1052.6h" alone doesn't quantify well at a glance - pairs it with a days
+// conversion, e.g. "1052.6h (43.9 days)". Originally local to tab-plan.js
+// (used for its own assembly/harvest ETA columns); moved here so the
+// Manifest overlay's Planetary/Assembly rows (js/overlay-manifest.js) can
+// show the same format instead of raw hours.
+export function formatHours(hours) {
+  return `${hours.toFixed(1)}h (${(hours / 24).toFixed(1)} days)`;
+}
+
 export function el(tag, props = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(props)) {

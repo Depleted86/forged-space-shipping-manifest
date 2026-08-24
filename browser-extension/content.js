@@ -311,10 +311,92 @@ function checkAssemblerPlans() {
     .catch(() => {});
 }
 
+// Systems Lexicon: a static reference/help panel ("Quick reference guide
+// for Forged Space gameplay"), not live game state - Manufacturing category,
+// "Planet Types & Resources" topic. Unlike storage/Corp Store/Assembler
+// Plans (all open during normal play, scraped continuously), this is a rare,
+// deliberate action - a player has to open Systems Lexicon, pick
+// Manufacturing, and click to expand this one topic - so js/tab-planets.js
+// has its own hint telling players that's what triggers a sync.
+//
+// Each topic on this screen is a <button> (its label is the only text node
+// inside, since its icon/chevron SVGs carry none) immediately followed, ONLY
+// while expanded, by a sibling <div> holding the topic's content - same
+// "find by header text, then scope to what follows" approach as
+// findIndigoPanel() above, just via a live DOM relationship (nextElementSibling)
+// instead of a fixed panel lookup, since Lexicon topics don't have IDs.
+// Confirmed via live inspection (not the assumed/fixed gradient/border
+// classes every topic row shares, which aren't unique to this one topic).
+const LEXICON_PLANET_TOPIC_LABEL = "Planet Types & Resources";
+// bg-slate-800/50's "/" needs an attribute-contains selector, not an
+// escaped class selector - same reasoning as STORAGE_ROW_SELECTOR/
+// INDIGO_ROW_SELECTOR above.
+const LEXICON_PLANET_LIST_SELECTOR = 'div[class*="bg-slate-800/50"][class*="space-y-2"]';
+const LEXICON_POLL_MS = 2000;
+
+let lastLexiconPlanetsSnapshot = null;
+
+function findExpandedLexiconTopicContent(topicLabel) {
+  for (const btn of document.querySelectorAll("button")) {
+    if (btn.textContent.trim() !== topicLabel) continue;
+    return btn.nextElementSibling || null; // null = this topic exists but isn't expanded right now
+  }
+  return null; // topic button not found at all (Lexicon closed, or a different category selected)
+}
+
+// "Arid worlds with mineral-rich sands. Resources: Cinderstone, Ferric Sand,
+// Kethite Glass, Xenocrete Powder." -> description + 4 resource names. NOT
+// consistently formatted in-game - some entries omit the "Resources: "
+// prefix and/or the trailing period (confirmed live: Gas World and the new
+// Toxic entry both do) - split on the first ". " (description/resources
+// boundary, which every observed entry has exactly once) rather than
+// assuming a fixed prefix/suffix.
+function parseLexiconPlanetEntry(nameText, paragraphText) {
+  const idx = paragraphText.indexOf(". ");
+  if (idx === -1) return null;
+  const description = paragraphText.slice(0, idx + 1).trim();
+  const resourcesPart = paragraphText.slice(idx + 2).trim().replace(/^Resources:\s*/i, "").replace(/\.$/, "");
+  const resources = resourcesPart.split(",").map((s) => s.trim()).filter(Boolean);
+  return resources.length > 0 ? { name: nameText.trim(), description, resources } : null;
+}
+
+function scrapeLexiconPlanetTypes() {
+  const content = findExpandedLexiconTopicContent(LEXICON_PLANET_TOPIC_LABEL);
+  if (!content) return [];
+  const listEl = content.querySelector(LEXICON_PLANET_LIST_SELECTOR);
+  if (!listEl) return [];
+  const items = [];
+  listEl.querySelectorAll(":scope > div").forEach((row) => {
+    const nameEl = row.querySelector("span");
+    const descEl = row.querySelector("p");
+    if (!nameEl || !descEl) return;
+    const parsed = parseLexiconPlanetEntry(nameEl.textContent, descEl.textContent);
+    if (parsed) items.push(parsed);
+  });
+  return items;
+}
+
+function checkLexiconPlanets() {
+  const items = scrapeLexiconPlanetTypes();
+  if (items.length === 0) return;
+  const snapshot = JSON.stringify(items);
+  if (snapshot === lastLexiconPlanetsSnapshot) return;
+  // Only marked "sent" once background.js confirms it - see
+  // checkCorpStore()'s comment for why. Matters even more here than for
+  // Assembler Plans: this topic is only in the DOM at all while a player
+  // has it manually expanded, a rare moment - a dropped send has no
+  // guarantee of a timely retry the way a continuously-open screen would get.
+  browser.runtime
+    .sendMessage({ type: "fsc-lexicon-planets-scrape", planetTypes: items })
+    .then(() => { lastLexiconPlanetsSnapshot = snapshot; })
+    .catch(() => {});
+}
+
 const pollIntervalIds = [
   setInterval(checkStorage, STORAGE_POLL_MS),
   setInterval(checkCorpStore, CORP_POLL_MS),
   setInterval(checkAssemblerPlans, ASSEMBLER_POLL_MS),
+  setInterval(checkLexiconPlanets, LEXICON_POLL_MS),
 ];
 
 // True once this content script's connection to its own extension has gone

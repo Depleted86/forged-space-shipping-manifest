@@ -61,6 +61,10 @@ const app = {
 
 async function bootstrap() {
   app.catalog = new Catalog();
+  // Overlays whatever's already been scraped from the in-game Systems
+  // Lexicon on top of the static baseline - see catalog.js's
+  // applyScrapedPlanetTypes() comment.
+  app.catalog.applyScrapedPlanetTypes(await storage.loadScrapedPlanetTypes());
   // Checked (and immediately marked done) before anything else loads, so a
   // brand-new install lands on Settings instead of Ore Database - see
   // storage.js's loadDashboardOnboarded() comment for why this isn't done
@@ -140,6 +144,38 @@ async function bootstrap() {
       storage.loadAssemblyPlans().then((assemblyPlans) => {
         app.assemblyPlans = assemblyPlans;
         if (app.refreshHooks.assembly) app.refreshHooks.assembly();
+      });
+    }
+    // app.settings was loaded ONCE at bootstrap and otherwise never
+    // refreshed - but tab-plan.js's pruneStaleItemSettings()/"Item sources"
+    // Mine-Buy toggle/calculatePlan(), and Settings tab's own Save, all call
+    // storage.saveSettings(app.settings) using THIS SAME stale in-memory
+    // object. Without this listener, any of those saves - triggered for a
+    // completely unrelated reason (switching builds, recalculating a plan)
+    // - would silently clobber a settings field changed elsewhere in the
+    // meantime (e.g. the Manifest overlay's per-item Farm/Buy toggle, or a
+    // per-material ore choice) back to whatever this stale snapshot had.
+    // Confirmed as the actual cause of a real "the overlay's Buy/Farm
+    // choice keeps reverting" report - not a rendering bug, a stale-write
+    // bug. Replaces the whole object (not a per-field patch) since any
+    // field could have changed; every read site accesses app.settings.X at
+    // read-time rather than caching a reference, so this is safe.
+    if (changes.settings) {
+      storage.loadSettings().then((settings) => {
+        app.settings = settings;
+        app.maxHarvesters = Number(settings.max_harvesters || app.maxHarvesters);
+        if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
+      });
+    }
+    // A fresh Systems Lexicon scrape (background.js's handleLexiconPlanetsScrape())
+    // re-applies onto the SAME app.catalog instance (additive, see
+    // catalog.js's applyScrapedPlanetTypes()) rather than replacing it, so
+    // every other tab's already-classified Ore/Material/PlanetType
+    // references stay valid - only the Planets tab needs to actually redraw.
+    if (changes.scrapedPlanetTypes) {
+      storage.loadScrapedPlanetTypes().then((scraped) => {
+        app.catalog.applyScrapedPlanetTypes(scraped);
+        if (app.refreshHooks.planets) app.refreshHooks.planets();
       });
     }
     // Plan a Build already refreshes its own build selector directly after

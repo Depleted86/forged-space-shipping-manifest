@@ -267,6 +267,12 @@ function closeModal() {
 
 async function loadLiveData() {
   if (!catalog) catalog = new Catalog();
+  // Re-applied every open (idempotent/additive - see catalog.js's
+  // applyScrapedPlanetTypes()), not just on first creation, so a scrape
+  // that happened after this modal's catalog was first built still shows
+  // up the next time it's opened - matches blueprints/assemblyPlans/builds
+  // below, all reloaded fresh on every open too.
+  catalog.applyScrapedPlanetTypes(await storage.loadScrapedPlanetTypes());
   blueprints = await storage.loadBlueprints();
   assemblyPlans = await storage.loadAssemblyPlans();
   builds = await storage.loadBuilds();

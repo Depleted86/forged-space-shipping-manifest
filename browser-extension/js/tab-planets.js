@@ -10,6 +10,24 @@ export function initPlanetsTab(app, container) {
   let planetSearch = "";
   let selectedResource = "";
 
+  // --- Systems Lexicon sync hint ---
+  // Unlike inventory/Corp Store/Assembler Plans (all scraped continuously
+  // while their screen is open during normal play), opening the Lexicon's
+  // Manufacturing > "Planet Types & Resources" panel is a deliberate, rare
+  // action - this hint is the only way a player would know that's what
+  // triggers a sync at all. See content.js's checkLexiconPlanets().
+  const lexiconHint = el("div", {
+    class: "hint",
+    text: 'New planet types sync automatically - in-game, open the Systems Lexicon, go to Manufacturing, and expand "Planet Types & Resources".',
+  });
+  const planetSyncStatus = el("div", { class: "status-text" });
+  async function renderPlanetSyncStatus() {
+    const meta = await storage.loadPlanetSyncStatus();
+    planetSyncStatus.textContent = meta
+      ? `Planet data last synced ${new Date(meta.syncedAt).toLocaleString()} - ${meta.count} type(s) known.`
+      : "No Lexicon sync yet - open the Systems Lexicon in-game to sync.";
+  }
+
   // --- Planet browser ---
   const searchLabel = el("label", { for: "planets-search-input", text: "Search:" });
   const searchInput = el("input", {
@@ -54,6 +72,17 @@ export function initPlanetsTab(app, container) {
     [el("option", { value: "", text: "(choose a resource)" }), ...app.catalog.planetResourceNames().map((n) => el("option", { value: n, text: n }))]
   );
   const summaryLabel = el("div", { class: "summary-text" });
+
+  // resourceSelect's options are only built once at tab-init time (unlike
+  // renderRoster()'s per-slot selects, which already rebuild fresh on every
+  // refresh) - a newly-Lexicon-scraped resource needs this to pick it up.
+  function refreshResourceSelectOptions() {
+    const current = resourceSelect.value;
+    clear(resourceSelect);
+    resourceSelect.appendChild(el("option", { value: "", text: "(choose a resource)" }));
+    for (const n of app.catalog.planetResourceNames()) resourceSelect.appendChild(el("option", { value: n, text: n }));
+    resourceSelect.value = current;
+  }
 
   function renderHarvesterSummary() {
     if (!selectedResource) {
@@ -137,6 +166,8 @@ export function initPlanetsTab(app, container) {
 
   container.appendChild(
     el("div", {}, [
+      lexiconHint,
+      planetSyncStatus,
       el("div", { class: "toolbar" }, [searchLabel, searchInput]),
       el("div", { class: "scroll-table" }, [planetTable]),
       el("h3", { class: "section-title", text: "Quick rate lookup" }),
@@ -152,10 +183,19 @@ export function initPlanetsTab(app, container) {
   renderHarvesterSummary();
   renderRoster();
   renderUsage();
+  renderPlanetSyncStatus();
 
   app.refreshHooks.planets = () => {
     renderRoster();
     renderUsage();
     renderHarvesterSummary();
+    // The three below only matter after a Systems Lexicon scrape actually
+    // changed app.catalog's planet data - harmless (and cheap) to also run
+    // them on every other refreshHooks.planets call (e.g. max-harvesters
+    // changes in Settings), since they're all pure re-renders from current
+    // state, not mutations.
+    renderPlanetTable();
+    refreshResourceSelectOptions();
+    renderPlanetSyncStatus();
   };
 }
