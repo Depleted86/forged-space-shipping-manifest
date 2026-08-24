@@ -2,6 +2,28 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 3.3 (prepared 2026-08-23, not yet submitted)
+
+### Release notes (public)
+
+- **New "focus" view for the Manifest overlay.** Click any item in the list to zoom in on just that one thing - the panel shrinks down to just the header, a "← All items" link, and that single item, hiding the Farm selector, the Personal Farm/Corp tabs, and the Add Blueprint/Dashboard buttons. A big space-saver if you're playing on a smaller screen and don't want the full list taking up the whole side of your view. Click "← All items" (or the same item again) to go back. Works the same way in both Personal Farm and Corp views.
+- The Corp view now has its own Blueprint/Build Order selector, just like Personal Farm already did - pick a corp target directly without needing the dashboard's Corp tab open.
+- New "Toxic" planet type added, and future planet types now sync automatically - open the in-game Systems Lexicon, go to Manufacturing, and expand "Planet Types & Resources" to pick up any new ones without waiting for an extension update.
+- Fixed a bug where a change made in the Manifest overlay (like switching an Assembly item between Farm and Buy) could get silently reverted if the dashboard happened to save its settings for an unrelated reason while it was open.
+- Assembly and Planetary time estimates now show days alongside hours (e.g. "1052.6h (43.9 days)") so long ETAs are easier to read at a glance.
+- Mining rows no longer clutter the line with a "(refined: N)" callout - hover the small info icon instead to see how much of that ore is earmarked for refining.
+- Redesigned the panel's resize handles for clarity.
+
+### Notes for reviewers (private)
+
+Update to a previously-approved extension (v3.2, approved 2026-08-20, auto-approved). No permission changes - still just `storage` and the single host permission for `https://forgedspace.com/*`.
+
+**The one new thing worth a direct look:** `content.js` now also reads the in-game "Systems Lexicon" reference panel (a static help/reference screen, Manufacturing category, "Planet Types & Resources" topic) when a player has that specific topic expanded, so new planet types can be picked up without an extension update instead of being hardcoded. Same read-only pattern as every other scraper already in this extension (storage screen, Corp Store, Assembler Plans) - `querySelectorAll`/`textContent` only, no `.click()`/`.dispatchEvent()`/form submission/page mutation of any kind. This only ever activates while that one specific reference topic is manually expanded by the player; it doesn't run continuously against arbitrary page content.
+
+Everything else this release (the Manifest overlay's new focus view, the Corp Blueprint/Build Order selector, the settings-sync bugfix, the hours/days formatting change, the resize-handle icon) is UI/logic added on top of the same existing Shadow DOM overlay and dashboard tabs from prior versions - no new permissions, no new network surface, no new page-DOM access beyond the Systems Lexicon read described above.
+
+**Re: the "Unsupported /background/service_worker manifest property is ignored by Firefox" warning**, if it appears again - expected and unchanged since v3.1 (this extension's `manifest.json` intentionally declares both `service_worker` and `scripts` in its `background` block so one manifest works across Chrome/Edge and Firefox).
+
 ## 3.2 (submitted 2026-08-20, approved 2026-08-20 - auto-approved, no manual review wait)
 
 ### Release notes (public)
