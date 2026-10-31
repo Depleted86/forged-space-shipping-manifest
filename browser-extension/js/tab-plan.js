@@ -15,7 +15,7 @@
 // headless recalculation - see recalculateActiveBuildToMineData() there.
 
 import { el, clear, selectableRow, enableInlineAutocomplete, formatHours } from "./dom-helpers.js";
-import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown } from "./calc-engine.js";
+import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames } from "./calc-engine.js";
 import * as storage from "./storage.js";
 import { applyLocalPendingDeduction } from "./tab-inventory.js";
 
@@ -286,9 +286,22 @@ export function initPlanTab(app, container) {
   const blueprintSelect = el("select", { id: "plan-blueprint-select" });
   const blueprintQtyLabel = el("label", { for: "plan-blueprint-qty", class: "visually-hidden", text: "Blueprint quantity" });
   const blueprintQtyInput = el("input", { id: "plan-blueprint-qty", type: "text", value: "1", style: "width:70px" });
+  // Ship-class filter for the blueprint picker (see blueprintShipClasses()).
+  const blueprintClassLabel = el("label", { for: "plan-blueprint-class", class: "visually-hidden", text: "Blueprint class" });
+  const blueprintClassSelect = el("select", { id: "plan-blueprint-class" });
+  blueprintClassSelect.addEventListener("change", () => refreshPlanBlueprintCombo());
   function refreshPlanBlueprintCombo() {
+    const wanted = blueprintClassSelect.value;
+    clear(blueprintClassSelect);
+    for (const c of ["", ...blueprintShipClasses(app.blueprints)]) blueprintClassSelect.appendChild(el("option", { value: c, text: shipClassLabel(c) }));
+    blueprintClassSelect.value = [...blueprintClassSelect.options].some((o) => o.value === wanted) ? wanted : "";
+    const picked = blueprintSelect.value;
     clear(blueprintSelect);
-    for (const name of Object.keys(app.blueprints).sort()) blueprintSelect.appendChild(el("option", { value: name, text: name }));
+    const names = Object.keys(app.blueprints).filter((name) => inShipClass(app.blueprints[name], blueprintClassSelect.value)).sort();
+    for (const [group, groupNames] of groupBlueprintNames(names, app.blueprints)) {
+      blueprintSelect.appendChild(el("optgroup", { label: group }, groupNames.map((name) => el("option", { value: name, text: name }))));
+    }
+    if ([...blueprintSelect.options].some((o) => o.value === picked)) blueprintSelect.value = picked;
   }
 
   async function addBlueprintToPlan() {
@@ -444,6 +457,17 @@ export function initPlanTab(app, container) {
         sourcesContainer.appendChild(
           el("div", { class: "field-row" }, [
             el("label", { class: "status-ok", text: `${name} — found on: ${obj.planetTypes.map((p) => p.name).join(", ")} — need ${need.toFixed(1)} — ${hoursText}` }),
+          ])
+        );
+      } else if (app.assemblyPlans[name] && !app.assemblyPlans[name].hasRecipe()) {
+        // Known from the R&D list only - no recipe to cascade, so no
+        // Mine/Buy choice to offer until the Assembly Facility shows it.
+        const plan = app.assemblyPlans[name];
+        const level = plan.research?.skillRequired;
+        const reason = !plan.isResearchLocked() ? "recipe not known yet" : level != null ? `Research ${level} required` : "not researched yet";
+        sourcesContainer.appendChild(
+          el("div", { class: "field-row" }, [
+            el("label", { class: "status-warn", text: `${name} (assembly, need ${need.toFixed(1)}) — ${reason}; buy it, or research it and open it in the Assembly Facility` }),
           ])
         );
       } else if (app.assemblyPlans[name]) {
@@ -881,7 +905,7 @@ export function initPlanTab(app, container) {
       buildStatus,
       syncStatus,
       el("h3", { class: "section-title", text: "Add to plan" }),
-      el("div", { class: "toolbar" }, [blueprintSelectLabel, blueprintSelect, blueprintQtyLabel, blueprintQtyInput, el("button", { text: "Add Blueprint to Plan", onclick: addBlueprintToPlan })]),
+      el("div", { class: "toolbar" }, [blueprintClassLabel, blueprintClassSelect, blueprintSelectLabel, blueprintSelect, blueprintQtyLabel, blueprintQtyInput, el("button", { text: "Add Blueprint to Plan", onclick: addBlueprintToPlan })]),
       el("div", { class: "toolbar" }, [materialLabel, materialInput, materialQtyLabel, materialQtyInput, el("button", { text: "Add Item to Plan", onclick: addMaterialToPlan })]),
       itemDatalist,
       el("h3", { class: "section-title", text: "Plan items" }),

@@ -4,6 +4,7 @@
 
 import { el, clear, selectableRow } from "./dom-helpers.js";
 import * as storage from "./storage.js";
+import { Inventory } from "./calc-engine.js";
 
 // Deducts (newBatches - oldBatches) * ore.batch raw ore from inventory
 // immediately (optimistic local update, ahead of the next live scrape sync)
@@ -126,10 +127,24 @@ export function initInventoryTab(app, container) {
     renderPendingTable();
   }
 
+  // Storage scrapes merge into this list (see background.js's
+  // handleStorageScrape()) so a filtered storage screen can't wipe it - which
+  // means an item used up entirely keeps its last count. This empties the
+  // list so the next unfiltered storage visit rebuilds it from scratch.
+  async function clearStoredInventory() {
+    if (!confirm("Clear the stored inventory? Open your storage screen in-game, with no filter, to rebuild it.")) return;
+    app.inventory = new Inventory();
+    await storage.saveInventory(app.inventory);
+    renderInventoryTable();
+    browser.runtime.sendMessage({ type: "fsc-refresh-manifest-selection" }).catch(() => {});
+    browser.runtime.sendMessage({ type: "fsc-refresh-manifest-corp-selection" }).catch(() => {});
+  }
+
   container.appendChild(
     el("div", {}, [
       statusLine,
-      el("div", { class: "toolbar" }, [el("label", { text: "Search:" }), searchInput]),
+      el("div", { class: "hint", text: "Opening your Commercial Storage with the search box empty refreshes the whole list. While searching, only the items shown are updated and the rest keep their last count, so the in-game filter is safe to use." }),
+      el("div", { class: "toolbar" }, [el("label", { text: "Search:" }), searchInput, el("button", { text: "Clear stored inventory", onclick: clearStoredInventory })]),
       el("div", { class: "scroll-table" }, [invTable]),
       el("h3", { class: "section-title", text: "Refining In Progress" }),
       el("div", { class: "toolbar" }, [

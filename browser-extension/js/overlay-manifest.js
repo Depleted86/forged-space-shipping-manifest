@@ -26,6 +26,7 @@ import { openAddBlueprintModal } from "./overlay-blueprint-modal.js";
 import { Catalog } from "./catalog.js";
 import * as storage from "./storage.js";
 import { formatHours } from "./dom-helpers.js";
+import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames } from "./calc-engine.js";
 
 const MAX_Z_INDEX = 2147483647; // largest valid CSS z-index - guarantees this paints above anything the game's own page sets, regardless of its own stacking contexts
 
@@ -52,6 +53,10 @@ let selectionRowEl = null;
 let selectionSelectEl = null;
 let selectionInfoEl = null;
 let markCompleteBtn = null;
+// Ship-class filter for the Blueprints group of both "Farm:" dropdowns
+// (Personal and Corp share one choice) - see blueprintShipClasses().
+let blueprintClassFilter = "";
+let classFilterEls = [];
 let corpSelectionRowEl = null;
 let corpSelectionSelectEl = null;
 let corpSelectionInfoEl = null;
@@ -249,6 +254,10 @@ const STYLE = `
     padding: 3px 6px;
     font-size: 12px;
   }
+  .fsc-class-filter {
+    flex: 0 1 auto;
+    max-width: 96px;
+  }
   .fsc-selection-select:focus {
     outline: none;
     border-color: #22d3ee;
@@ -320,6 +329,16 @@ const STYLE = `
   .fsc-row-clickable:hover {
     outline: 1px solid rgba(103, 232, 249, 0.4);
     outline-offset: -1px;
+  }
+  .fsc-cost-row {
+    padding: 4px 6px;
+    margin-bottom: 4px;
+    font-size: 12px;
+    color: #fbbf24;
+    border-bottom: 1px solid #334155;
+  }
+  .fsc-cost-row .fsc-cost-note {
+    color: #94a3b8;
   }
   .fsc-back-btn {
     display: block;
@@ -553,6 +572,7 @@ export function initManifestOverlay() {
         blueprints = bp;
         refreshSelectionSelector();
         refreshCorpSelectionSelector();
+        render(); // the cost line above Mining shows store prices
       });
     }
     // A build may have just been renamed on the dashboard's Plan a Build tab
@@ -731,7 +751,7 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-mark-manifest-selection-complete" }).catch(() => {});
   });
 
-  selectionRowEl.append(selectionLabel, selectionSelectEl, refreshBtn, markCompleteBtn, selectionInfoEl);
+  selectionRowEl.append(selectionLabel, makeClassFilter("fsc-class-filter"), selectionSelectEl, refreshBtn, markCompleteBtn, selectionInfoEl);
 
   // Corp's own Blueprint/Build Order switcher - exact mirror of the
   // Personal one above (same manifestCorpSelection/manifestCorpToMineData
@@ -774,7 +794,7 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-refresh-manifest-corp-selection" }).catch(() => {});
   });
 
-  corpSelectionRowEl.append(corpSelectionLabel, corpSelectionSelectEl, corpRefreshBtn, corpSelectionInfoEl);
+  corpSelectionRowEl.append(corpSelectionLabel, makeClassFilter("fsc-corp-class-filter"), corpSelectionSelectEl, corpRefreshBtn, corpSelectionInfoEl);
 
   viewToggleEl = document.createElement("div");
   viewToggleEl.className = "fsc-view-toggle";
@@ -860,8 +880,63 @@ function updateSelectionRowVisibility() {
   if (corpSelectionRowEl) corpSelectionRowEl.classList.toggle("fsc-hidden", currentView !== "corp" || Boolean(focusedItem));
 }
 
+function makeClassFilter(id) {
+  const select = document.createElement("select");
+  select.id = id;
+  select.className = "fsc-selection-select fsc-class-filter";
+  select.setAttribute("aria-label", "Blueprint class");
+  select.title = "Show only blueprints of this class";
+  select.addEventListener("change", () => {
+    blueprintClassFilter = select.value;
+    refreshSelectionSelector();
+    refreshCorpSelectionSelector();
+  });
+  classFilterEls.push(select);
+  return select;
+}
+
+function refreshClassFilters() {
+  const values = ["", ...blueprintShipClasses(blueprints)];
+  if (!values.includes(blueprintClassFilter)) blueprintClassFilter = "";
+  for (const select of classFilterEls) {
+    select.innerHTML = "";
+    for (const v of values) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = shipClassLabel(v);
+      select.appendChild(opt);
+    }
+    select.value = blueprintClassFilter;
+  }
+}
+
+// The Blueprints a "Farm:" dropdown lists under the current class filter -
+// always including the one already selected, so the dropdown never shows
+// blank just because the filter hides it.
+function filteredBlueprintNames(selection) {
+  return Object.keys(blueprints)
+    .filter((name) => inShipClass(blueprints[name], blueprintClassFilter) || (selection?.type === "blueprint" && selection.name === name))
+    .sort();
+}
+
+// One optgroup per store the blueprints came from (Blueprints, Ships, ...).
+function appendBlueprintGroups(select, names) {
+  for (const [label, groupNames] of groupBlueprintNames(names, blueprints)) {
+    const group = document.createElement("optgroup");
+    group.label = label;
+    for (const name of groupNames) {
+      const opt = document.createElement("option");
+      opt.value = `blueprint:${name}`;
+      opt.textContent = name;
+      group.appendChild(opt);
+    }
+    select.appendChild(group);
+  }
+}
+
 function refreshSelectionSelector() {
   if (!selectionSelectEl) return;
+  refreshClassFilters();
   updateSelectionRowVisibility();
 
   selectionSelectEl.innerHTML = "";
@@ -870,18 +945,8 @@ function refreshSelectionSelector() {
   placeholder.textContent = "-- Select --";
   selectionSelectEl.appendChild(placeholder);
 
-  const blueprintNames = Object.keys(blueprints).sort();
-  if (blueprintNames.length > 0) {
-    const group = document.createElement("optgroup");
-    group.label = "Blueprints";
-    for (const name of blueprintNames) {
-      const opt = document.createElement("option");
-      opt.value = `blueprint:${name}`;
-      opt.textContent = name;
-      group.appendChild(opt);
-    }
-    selectionSelectEl.appendChild(group);
-  }
+  const blueprintNames = filteredBlueprintNames(manifestSelection);
+  appendBlueprintGroups(selectionSelectEl, blueprintNames);
 
   const buildNames = Object.keys(builds).sort((a, b) => Number(a) - Number(b));
   if (buildNames.length > 0) {
@@ -924,6 +989,7 @@ function refreshSelectionSelector() {
 // Corp view, not Personal).
 function refreshCorpSelectionSelector() {
   if (!corpSelectionSelectEl) return;
+  refreshClassFilters();
   updateSelectionRowVisibility();
 
   corpSelectionSelectEl.innerHTML = "";
@@ -932,18 +998,8 @@ function refreshCorpSelectionSelector() {
   placeholder.textContent = "-- Select --";
   corpSelectionSelectEl.appendChild(placeholder);
 
-  const blueprintNames = Object.keys(blueprints).sort();
-  if (blueprintNames.length > 0) {
-    const group = document.createElement("optgroup");
-    group.label = "Blueprints";
-    for (const name of blueprintNames) {
-      const opt = document.createElement("option");
-      opt.value = `blueprint:${name}`;
-      opt.textContent = name;
-      group.appendChild(opt);
-    }
-    corpSelectionSelectEl.appendChild(group);
-  }
+  const blueprintNames = filteredBlueprintNames(manifestCorpSelection);
+  appendBlueprintGroups(corpSelectionSelectEl, blueprintNames);
 
   const buildNames = Object.keys(builds).sort((a, b) => Number(a) - Number(b));
   if (buildNames.length > 0) {
@@ -1483,8 +1539,10 @@ function renderBuyRow(item) {
   label.title = label.textContent;
   if (!item.has_plan) {
     row.className = "fsc-row fsc-row-clickable";
-    row.textContent = label.textContent;
-    row.title = label.textContent;
+    row.textContent = item.no_recipe_reason ? `${label.textContent} (${item.no_recipe_reason})` : label.textContent;
+    row.title = item.no_recipe_reason
+      ? `${row.textContent} - can't be farmed until its recipe is known: research it, then open it in the Assembly Facility`
+      : row.textContent;
     return row;
   }
   row.className = "fsc-row fsc-row-flex fsc-row-clickable";
@@ -1583,6 +1641,51 @@ function renderFocusedItem() {
   return false;
 }
 
+// What the selected Blueprint costs to buy, from its store scrape - or, for
+// a Build Order, the total for its blueprints not owned yet (one copy
+// each). Shown above the first section; nothing when nothing's selected.
+function renderBlueprintCost(selection) {
+  if (!selection) return;
+  const cr = (n) => `${n.toLocaleString()} CR`;
+  const row = document.createElement("div");
+  row.className = "fsc-cost-row";
+  const note = document.createElement("span");
+  note.className = "fsc-cost-note";
+  if (selection.type === "blueprint") {
+    const st = blueprints[selection.name]?.store;
+    if (st?.price == null) {
+      row.textContent = "Blueprint cost: ";
+      note.textContent = "unknown - open it in its store";
+    } else {
+      row.textContent = `Blueprint cost: ${cr(st.price)}`;
+      if (st.owned) note.textContent = ` (owned, ${st.copies} ${st.copies === 1 ? "copy" : "copies"})`;
+    }
+  } else {
+    const names = [...new Set((builds[selection.name] || []).filter(([kind]) => kind === "blueprint" || kind === "recipe").map(([, name]) => name))];
+    if (names.length === 0) return;
+    // Hand-entered blueprints were never seen in a store - ownership and
+    // price unknown, so they're counted apart rather than as "to buy".
+    const unseen = names.filter((name) => !blueprints[name]?.store);
+    const toBuy = names.filter((name) => blueprints[name]?.store && !blueprints[name].store.owned);
+    const total = toBuy.reduce((sum, name) => sum + (blueprints[name].store.price ?? 0), 0);
+    const unpriced = toBuy.filter((name) => blueprints[name].store.price == null).length;
+    const extra = [unpriced ? `${unpriced} price unknown` : null, unseen.length ? `${unseen.length} not seen in a store` : null].filter(Boolean);
+    if (toBuy.length === 0) {
+      row.textContent = "Blueprints: ";
+      note.textContent = `all owned${extra.length ? ` (${extra.join(", ")})` : ""}`;
+    } else {
+      row.textContent = `Blueprints to buy: ${cr(total)}`;
+      note.textContent = ` (${[`${toBuy.length} not owned`, ...extra].join(", ")})`;
+    }
+    row.title = [
+      ...toBuy.map((name) => `${name}: ${blueprints[name].store.price != null ? cr(blueprints[name].store.price) : "price unknown"}`),
+      ...unseen.map((name) => `${name}: not seen in a store`),
+    ].join("\n");
+  }
+  if (note.textContent) row.appendChild(note);
+  listEl.appendChild(row);
+}
+
 function render() {
   listEl.innerHTML = "";
   personalBtn.setAttribute("aria-pressed", String(currentView === "personal"));
@@ -1645,6 +1748,8 @@ function render() {
     }
     focusChromeActive = false;
   }
+
+  renderBlueprintCost(currentView === "corp" ? manifestCorpSelection : manifestSelection);
 
   if (currentView === "corp") {
     const byCategory = { ore: [], assembly: [], planetary: [], commodity: [] };

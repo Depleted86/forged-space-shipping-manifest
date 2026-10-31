@@ -9,7 +9,7 @@
 // imports its materials. Hand entry still works for anything else.
 
 import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
-import { Blueprint } from "./calc-engine.js";
+import { Blueprint, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
 export function initBlueprintsTab(app, container) {
@@ -25,6 +25,11 @@ export function initBlueprintsTab(app, container) {
 
   const blueprintSelectLabel = el("label", { for: "blueprints-list", class: "visually-hidden", text: "Saved blueprints" });
   const blueprintSelect = el("select", { id: "blueprints-list", size: "20", class: "list-select" });
+  // Narrows the (long, store-fed) list to one ship class - see
+  // blueprintShipClasses() in calc-engine.js.
+  const classFilterLabel = el("label", { for: "blueprints-class-filter", text: "Class:", style: "width: auto; white-space: nowrap;" });
+  const classFilter = el("select", { id: "blueprints-class-filter", style: "flex: 1; min-width: 0;" });
+  classFilter.addEventListener("change", () => refreshListbox());
   // width:auto (overriding the global .field-row label 200px, which other
   // tabs' stacked field-rows rely on for their OWN internal alignment)
   // plus flex:1 on the input, so "Blueprint name:" sits as close to its input
@@ -143,16 +148,31 @@ export function initBlueprintsTab(app, container) {
     return confirm("Discard unsaved changes to this blueprint?");
   }
 
+  function refreshClassFilter() {
+    const current = classFilter.value;
+    clear(classFilter);
+    for (const c of ["", ...blueprintShipClasses(app.blueprints)]) classFilter.appendChild(el("option", { value: c, text: shipClassLabel(c) }));
+    // Keep the choice unless that class has disappeared.
+    classFilter.value = [...classFilter.options].some((o) => o.value === current) ? current : "";
+  }
+
   function refreshListbox() {
+    refreshClassFilter();
     clear(blueprintSelect);
+    const inClass = (name) => inShipClass(app.blueprints[name], classFilter.value);
     // Sorted by Manufacturing Skill needed (unknown last), then name, with
     // the skill shown up front so a too-high one is obvious before buying.
     const skillOf = (name) => app.blueprints[name].store?.mfgSkill ?? Infinity;
-    const names = Object.keys(app.blueprints).sort((a, b) => skillOf(a) - skillOf(b) || a.localeCompare(b));
-    for (const name of names) {
-      const skill = app.blueprints[name].store?.mfgSkill;
-      const prefix = skill != null ? `[Mfg ${skill}] ` : "[Mfg ?] ";
-      blueprintSelect.appendChild(el("option", { value: name, text: prefix + name + listTag(app.blueprints[name]), selected: name === editingBlueprint ? "" : undefined }));
+    const names = Object.keys(app.blueprints).filter(inClass).sort((a, b) => skillOf(a) - skillOf(b) || a.localeCompare(b));
+    // Grouped by the store each came from (Blueprints, Ships, ...).
+    for (const [group, groupNames] of groupBlueprintNames(names, app.blueprints)) {
+      const optgroup = el("optgroup", { label: group });
+      for (const name of groupNames) {
+        const skill = app.blueprints[name].store?.mfgSkill;
+        const prefix = skill != null ? `[Mfg ${skill}] ` : "[Mfg ?] ";
+        optgroup.appendChild(el("option", { value: name, text: prefix + name + listTag(app.blueprints[name]), selected: name === editingBlueprint ? "" : undefined }));
+      }
+      blueprintSelect.appendChild(optgroup);
     }
     blueprintSelect.value = editingBlueprint || "";
   }
@@ -287,6 +307,7 @@ export function initBlueprintsTab(app, container) {
     el("div", { class: "split-layout" }, [
       el("div", { class: "side-list" }, [
         el("div", { class: "field-row" }, [skillLabel, skillInput]),
+        el("div", { class: "field-row" }, [classFilterLabel, classFilter]),
         blueprintSelectLabel,
         blueprintSelect,
         el("div", { class: "toolbar" }, [

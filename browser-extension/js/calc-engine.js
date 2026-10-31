@@ -57,6 +57,55 @@ export class Blueprint {
   }
 }
 
+// Ship-class filtering for the long, store-fed blueprint lists (Blueprints
+// tab, Plan a Build, Manifest overlay). A class is the store's badge
+// ("Frigate", "Cruiser", "Miner"...); hand-entered blueprints have none and
+// are grouped under NO_SHIP_CLASS. "" means no filter.
+export const NO_SHIP_CLASS = "__none__";
+
+export function blueprintShipClasses(blueprints) {
+  const all = Object.values(blueprints);
+  const classes = [...new Set(all.map((b) => b.store?.shipClass).filter(Boolean))].sort();
+  if (all.some((b) => !b.store?.shipClass)) classes.push(NO_SHIP_CLASS);
+  return classes;
+}
+
+export function inShipClass(blueprint, wanted) {
+  const c = blueprint?.store?.shipClass;
+  return !wanted || (wanted === NO_SHIP_CLASS ? !c : c === wanted);
+}
+
+export function shipClassLabel(value) {
+  return value === "" ? "All classes" : value === NO_SHIP_CLASS ? "(no class)" : value;
+}
+
+// Which store a blueprint came from, as a dropdown group heading. Module
+// stores are titled by maker ("Kriton Blueprints") and share "Modules".
+// Blueprints scraped before the store name was recorded are placed by what
+// only that store shows (Ship Value, Engineering to fit) until the store is
+// opened again; hand-entered ones go under "Other".
+export const STORE_GROUPS = ["Blueprints", "Ships", "Auxiliary Systems", "Modules", "Other"];
+
+export function blueprintStoreGroup(blueprint) {
+  const st = blueprint?.store;
+  const name = st?.storeName;
+  if (name === "Blueprint Store") return "Blueprints";
+  if (name === "Starship Blueprint Store") return "Ships";
+  if (name === "Auxiliary Systems") return "Auxiliary Systems";
+  if (name && /\sBlueprints$/.test(name)) return "Modules";
+  if (st?.shipValue != null) return "Ships";
+  if (st?.engReq != null) return "Modules";
+  return "Other";
+}
+
+// names (already sorted however the caller wants) split into
+// [[group, names], ...] in STORE_GROUPS order, empty groups left out.
+export function groupBlueprintNames(names, blueprints) {
+  const byGroup = new Map(STORE_GROUPS.map((g) => [g, []]));
+  for (const name of names) byGroup.get(blueprintStoreGroup(blueprints[name])).push(name);
+  return [...byGroup].filter(([, list]) => list.length > 0);
+}
+
 // How a Commodity is produced at the Assembly. Production happens in
 // one-hour runs: each run consumes `requirements` once (the ingredient list
 // exactly as the game's Assembly Facility screen lists it) and yields

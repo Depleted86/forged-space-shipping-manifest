@@ -47,10 +47,33 @@ const STORAGE_POLL_MS = 2000;
 
 let lastStorageSnapshot = null;
 
-// Scrapes whatever storage rows are currently in the DOM. Returns [] if the
-// storage screen isn't open (selector matches nothing).
+// The Commercial Storage window (Promenade > Storage Facility) puts Ship
+// Cargo and Commercial Storage side by side, so rows are only read from the
+// column under the "Commercial Storage" heading - cargo items must never be
+// counted as stored. That column's header also has an "N items" badge, and
+// the window a "Search items..." box: the list is only complete (safe to
+// replace the stored inventory with, so used-up items drop to 0) when the
+// search is empty AND every badged item was read. Anything less is merged
+// by background.js instead.
+function storageColumn() {
+  for (const h4 of document.querySelectorAll("h4")) {
+    if (h4.textContent.trim() === "Commercial Storage") return h4.closest(".space-y-4") || h4.parentElement.parentElement;
+  }
+  return null;
+}
+
+function storageListIsComplete(column, rowCount) {
+  const search = document.querySelector('input[placeholder^="Search items"]');
+  if (search && search.value.trim() !== "") return false;
+  const badge = [...column.querySelectorAll("div")].map((el) => el.textContent.trim().match(/^([\d,]+) items?$/)).find(Boolean);
+  return !!badge && parseInt(badge[1].replace(/,/g, ""), 10) === rowCount;
+}
+
+// Scrapes whatever storage rows are currently in the DOM. Returns
+// {items: [], complete: false} if the storage screen isn't open.
 function scrapeStorageRows() {
-  const rows = document.querySelectorAll(STORAGE_ROW_SELECTOR);
+  const column = storageColumn();
+  const rows = (column || document).querySelectorAll(STORAGE_ROW_SELECTOR);
   const items = [];
   rows.forEach((row) => {
     const nameEl = row.querySelector(STORAGE_NAME_SELECTOR);
@@ -63,7 +86,7 @@ function scrapeStorageRows() {
     if (!name || Number.isNaN(quantity)) return;
     items.push({ name, quantity });
   });
-  return items;
+  return { items, complete: !!column && items.length > 0 && storageListIsComplete(column, items.length) };
 }
 
 // Offices > Store screen: two side-by-side panels - "Your Commercial
@@ -162,14 +185,23 @@ function checkStorage() {
   // fall back to the Offices panel - either way the result feeds the same
   // fsc-storage-scrape pipeline, so personal inventory updates identically
   // no matter which one the player happens to have open.
-  const dockingItems = scrapeStorageRows();
-  const items = dockingItems.length > 0 ? dockingItems : scrapeCommercialStoragePanelRows();
-  if (items.length === 0) return;
-  const snapshot = JSON.stringify(items);
+  const docking = scrapeStorageRows();
+  // The Offices panel has no way to tell a filtered list from a full one,
+  // so it's always merged.
+  const items = docking.items.length > 0 ? docking.items : scrapeCommercialStoragePanelRows();
+  const complete = docking.items.length > 0 && docking.complete;
+  if (items.length === 0) {
+    // Screen closed - forget what was last sent, so reopening it always
+    // resyncs (the stored inventory may have changed meanwhile, e.g. from
+    // refining batches entered in the Manifest or edits on the dashboard).
+    lastStorageSnapshot = null;
+    return;
+  }
+  const snapshot = JSON.stringify([items, complete]);
   if (snapshot === lastStorageSnapshot) return;
   // See checkCorpStore()'s comment - only marked "sent" once confirmed.
   browser.runtime
-    .sendMessage({ type: "fsc-storage-scrape", items })
+    .sendMessage({ type: "fsc-storage-scrape", items, complete })
     .then(() => { lastStorageSnapshot = snapshot; })
     .catch(() => {});
 }
@@ -374,11 +406,14 @@ function isBlueprintStoreTitle(text) {
 }
 let lastBlueprintStoreSnapshot = null;
 
+// The open store's panel and its title ("Starship Blueprint Store"...), or
+// null - the title tells the dashboard which store a blueprint came from.
 function blueprintStorePanel() {
   for (const h3 of document.querySelectorAll("h3")) {
     // The title <h3> also holds a help button, so match on its own text.
-    if (h3.firstChild && isBlueprintStoreTitle(h3.firstChild.textContent.trim())) {
-      return h3.closest("[data-panel-open]") || h3.parentElement.parentElement.parentElement;
+    const title = h3.firstChild ? h3.firstChild.textContent.trim() : "";
+    if (isBlueprintStoreTitle(title)) {
+      return { panel: h3.closest("[data-panel-open]") || h3.parentElement.parentElement.parentElement, title };
     }
   }
   return null;
@@ -409,8 +444,9 @@ function parseCredits(text) {
 }
 
 function scrapeBlueprintStore() {
-  const panel = blueprintStorePanel();
-  if (!panel) return null;
+  const found = blueprintStorePanel();
+  if (!found) return null;
+  const panel = found.panel;
   const list = [];
   let detail = null;
   for (const h3 of panel.querySelectorAll("h3")) {
@@ -481,7 +517,7 @@ function scrapeBlueprintStore() {
       discountPct: discount ? parseInt(discount[1], 10) : 0,
     });
   }
-  return list.length || detail ? { list, detail } : null;
+  return list.length || detail ? { list, detail, storeName: found.title } : null;
 }
 
 function checkBlueprintStore() {
@@ -492,7 +528,7 @@ function checkBlueprintStore() {
   // See checkCorpStore()'s comment for why this is only marked sent once
   // background.js confirms it.
   browser.runtime
-    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail })
+    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail, storeName: scraped.storeName })
     .then(() => { lastBlueprintStoreSnapshot = snapshot; })
     .catch(() => {});
 }
@@ -504,7 +540,8 @@ function checkBlueprintStore() {
 // the player typing them in. The Captain
 // level comes from the top HUD bar instead ("Captain" over "Level 41"),
 // which is always on screen; starship blueprints' "Level Req" is checked
-// against it.
+// against it. The same bar gives the ship's Cargo and Ore Hold capacities,
+// which set the mining trip size.
 const SKILLS_PANEL_TITLE = "Character Skills";
 let lastSkillsSnapshot = null;
 
@@ -517,6 +554,25 @@ function scrapeSkillLevel(skillName) {
     if (level) return parseInt(level[1], 10);
   }
   return null;
+}
+
+// The HUD bar's "Cargo 0/150" and, on ships that have one, "Ore Hold
+// 0/2000" - label span followed by a "used/capacity" span. Returns the
+// capacities ({cargo, oreHold}, oreHold null when the ship has none), or
+// null when the HUD isn't on screen, so a hidden HUD never reads as "no
+// Ore Hold".
+function scrapeShipHolds() {
+  const capacityAfter = (label) => {
+    for (const span of document.querySelectorAll("span")) {
+      if (span.textContent.trim() !== label || !span.nextElementSibling) continue;
+      const m = span.nextElementSibling.textContent.trim().match(/^[\d,]+\s*\/\s*([\d,]+)$/);
+      if (m) return parseInt(m[1].replace(/,/g, ""), 10);
+    }
+    return null;
+  };
+  const cargo = capacityAfter("Cargo");
+  if (cargo === null) return null;
+  return { cargo, oreHold: capacityAfter("Ore Hold") };
 }
 
 function scrapeCaptainLevel() {
@@ -532,13 +588,14 @@ function checkSkills() {
   const manufacturing = scrapeSkillLevel("Manufacturing");
   const engineering = scrapeSkillLevel("Engineering");
   const captain = scrapeCaptainLevel();
-  if (manufacturing === null && engineering === null && captain === null) return;
-  const snapshot = `${manufacturing}/${engineering}/${captain}`;
+  const holds = scrapeShipHolds();
+  if (manufacturing === null && engineering === null && captain === null && holds === null) return;
+  const snapshot = JSON.stringify([manufacturing, engineering, captain, holds]);
   if (snapshot === lastSkillsSnapshot) return;
   // See checkCorpStore()'s comment for why this is only marked sent once
   // background.js confirms it.
   browser.runtime
-    .sendMessage({ type: "fsc-skills-scrape", manufacturing, engineering, captain })
+    .sendMessage({ type: "fsc-skills-scrape", manufacturing, engineering, captain, holds })
     .then(() => { lastSkillsSnapshot = snapshot; })
     .catch(() => {});
 }

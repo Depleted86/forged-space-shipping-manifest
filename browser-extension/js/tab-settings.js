@@ -199,12 +199,23 @@ export function initSettingsTab(app, container) {
       })
     : null;
 
+  // Cargo/Ore Hold read from the game's HUD (background.js's
+  // handleSkillsScrape()) - reflect them here, but never over a field the
+  // player is typing in.
+  app.refreshHooks.settingsFields = () => {
+    if (document.activeElement !== cargoInput) cargoInput.value = String(app.settings.cargo_capacity);
+    if (document.activeElement !== oreHoldCapacityInput) oreHoldCapacityInput.value = String(app.settings.ore_hold_capacity);
+    hasOreHoldInput.checked = !!app.settings.has_ore_hold;
+    oreHoldCapacityRow.style.display = hasOreHoldInput.checked ? "" : "none";
+  };
+
   container.appendChild(
     el("div", {}, [
       welcomeHint,
       el("div", { class: "field-row" }, [el("label", { text: "Cargo capacity per trip:" }), cargoInput]),
       el("div", { class: "field-row" }, [el("label", { text: "Do you have an Ore Hold?" }), hasOreHoldInput]),
       oreHoldCapacityRow,
+      el("div", { class: "hint", text: "Cargo and Ore Hold fill in from the game's top bar while it's open - mining trips use the Ore Hold when your ship has one, otherwise cargo. You can still type them here." }),
       el("div", { class: "field-row" }, [el("label", { text: "Max harvesters at once:" }), maxHarvestersInput]),
       statusText,
       el("h3", { class: "section-title", text: "Backup & restore" }),

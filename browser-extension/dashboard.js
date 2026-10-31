@@ -168,6 +168,7 @@ async function bootstrap() {
         app.maxHarvesters = Number(settings.max_harvesters || app.maxHarvesters);
         if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
         if (app.refreshHooks.blueprintsSkill) app.refreshHooks.blueprintsSkill();
+        if (app.refreshHooks.settingsFields) app.refreshHooks.settingsFields();
       });
     }
     // A fresh Systems Lexicon scrape (background.js's handleLexiconPlanetsScrape())

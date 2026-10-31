@@ -115,14 +115,26 @@ async function handleOpenDashboard() {
 // whatever's currently in storage.local's `inventory` key - the same
 // classification logic used to live in inventory_import.py's
 // apply_items_to_inventory, called from the Python bridge's POST handler.
-async function handleStorageScrape(items) {
+// complete: content.js saw the whole storage list (search box empty, row
+// count matching the window's "N items" badge), so it replaces the stored
+// inventory - an item used up entirely drops to 0. Otherwise (a search is
+// filtering it, or the count didn't match) it's merged: the items shown are
+// updated and everything else keeps its last count, since replacing would
+// zero whatever the filter hid. The Inventory tab's "Clear stored
+// inventory" resets the list by hand if it ever drifts.
+async function handleStorageScrape(items, complete) {
+  const inventory = await storage.loadInventory(catalog);
   const itemsDict = {};
+  if (!complete) {
+    for (const [ore, qty] of inventory.rawOre) itemsDict[ore.name] = qty;
+    for (const [material, qty] of inventory.refined) itemsDict[material.name] = qty;
+    Object.assign(itemsDict, inventory.other);
+  }
   for (const item of items || []) {
     if (item && item.name && item.quantity !== null && item.quantity !== undefined) {
       itemsDict[String(item.name)] = Number(item.quantity);
     }
   }
-  const inventory = await storage.loadInventory(catalog);
   const { matched, unmatched } = applyItemsToInventory(catalog, inventory, itemsDict);
   await storage.saveInventory(inventory);
   await storage.saveInventorySyncStatus({ syncedAt: new Date().toISOString(), matched, unmatched });
@@ -381,7 +393,7 @@ function blueprintKeyFor(storeName, blueprints) {
 // Every listed blueprint gets its ownership refreshed (added if new, with
 // no recipe); the one open in the detail panel gets its recipe replaced
 // with the store's, which is authoritative over a hand-entered one.
-async function handleBlueprintStoreScrape(list, detail) {
+async function handleBlueprintStoreScrape(list, detail, storeName) {
   const blueprints = await storage.loadBlueprints();
   for (const item of list || []) {
     if (!item || !item.name) continue;
@@ -400,6 +412,7 @@ async function handleBlueprintStoreScrape(list, detail) {
       basePrice: item.basePrice ?? null,
       discountPct: item.discountPct || 0,
       engReq: item.engReq ?? blueprint.store?.engReq ?? null,
+      storeName: storeName || blueprint.store?.storeName || null,
     };
     blueprints[key] = blueprint;
   }
@@ -414,6 +427,7 @@ async function handleBlueprintStoreScrape(list, detail) {
       guideValue: detail.guideValue ?? null,
       mfgSkill: detail.mfgSkill ?? null,
       shipValue: detail.shipValue ?? null,
+      storeName: storeName || blueprint.store?.storeName || null,
     };
     if (detail.engReq != null) blueprint.store.engReq = detail.engReq;
     if (detail.buildLimit != null) blueprint.store.buildLimit = detail.buildLimit;
@@ -432,7 +446,11 @@ async function handleBlueprintStoreScrape(list, detail) {
 // Character Skills window by content.js; captain: their Captain level, from
 // the HUD. Either may be null (Skills window closed). Only written when one
 // changed, so the dashboard isn't told settings changed on every poll.
-async function handleSkillsScrape(manufacturing, engineering, captain) {
+// holds: {cargo, oreHold} capacities from the HUD (oreHold null = this ship
+// has no Ore Hold), or null when the HUD wasn't on screen. A ship with an
+// Ore Hold mines into it, so its capacity becomes the trip size; otherwise
+// cargo is. Changing ships changes every trip count, so that recalculates.
+async function handleSkillsScrape(manufacturing, engineering, captain, holds) {
   const settings = await storage.loadSettings();
   let changed = false;
   if (Number.isInteger(manufacturing) && manufacturing >= 0 && settings.manufacturing_skill !== manufacturing) {
@@ -447,7 +465,29 @@ async function handleSkillsScrape(manufacturing, engineering, captain) {
     settings.captain_level = captain;
     changed = true;
   }
-  if (changed) await storage.saveSettings(settings);
+  let holdsChanged = false;
+  if (holds && Number.isInteger(holds.cargo) && holds.cargo > 0) {
+    const hasOreHold = Number.isInteger(holds.oreHold) && holds.oreHold > 0;
+    if (settings.cargo_capacity !== holds.cargo) {
+      settings.cargo_capacity = holds.cargo;
+      holdsChanged = true;
+    }
+    if (settings.has_ore_hold !== hasOreHold) {
+      settings.has_ore_hold = hasOreHold;
+      holdsChanged = true;
+    }
+    if (hasOreHold && settings.ore_hold_capacity !== holds.oreHold) {
+      settings.ore_hold_capacity = holds.oreHold;
+      holdsChanged = true;
+    }
+  }
+  if (changed || holdsChanged) await storage.saveSettings(settings);
+  if (holdsChanged) {
+    await recalculateActiveBuildToMineData();
+    await recalculateActiveBuildCorpData();
+    await recalculateManifestSelection();
+    await recalculateManifestCorpSelection();
+  }
 }
 
 // items: [{name, description, resources}] scraped from the in-game Systems
@@ -607,10 +647,24 @@ async function recalculateManifestSelection() {
   // here so the overlay only offers that toggle where it would actually do
   // something, rather than a Farm option that silently no-ops because
   // there's nothing to cascade.
+  // A plan known only from the R&D list has no recipe yet, so "Farm" has
+  // nothing to cascade into either - it counts as no plan here, with the
+  // reason passed along for the row to show.
   for (const item of stored.buy) {
-    item.has_plan = Boolean(assemblyPlans[item.name]);
+    const plan = assemblyPlans[item.name];
+    item.has_plan = Boolean(plan && plan.hasRecipe());
+    item.no_recipe_reason = plan && !plan.hasRecipe() ? noRecipeReason(plan) : null;
   }
   await storage.saveManifestToMineData(stored);
+}
+
+// Why a recipe-less plan can't be farmed yet: the Research Skill level the
+// R&D list says it needs ("Research 11 required"), or a generic reason when
+// that wasn't shown.
+function noRecipeReason(plan) {
+  if (!plan.isResearchLocked()) return "no recipe yet";
+  const level = plan.research?.skillRequired;
+  return level != null ? `Research ${level} required` : "not researched";
 }
 
 // Lets the overlay's Assembly/Buy rows toggle an item between "Farm"
@@ -763,12 +817,12 @@ async function handleMarkManifestSelectionComplete() {
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return undefined;
   let handled;
-  if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items);
+  if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items, msg.complete === true);
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
   else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
-  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail);
-  else if (msg.type === "fsc-skills-scrape") handled = handleSkillsScrape(msg.manufacturing, msg.engineering, msg.captain);
+  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName);
+  else if (msg.type === "fsc-skills-scrape") handled = handleSkillsScrape(msg.manufacturing, msg.engineering, msg.captain, msg.holds);
   else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
   else if (msg.type === "fsc-switch-manifest-selection") handled = handleSwitchManifestSelection(msg.selection);
@@ -797,6 +851,12 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // ignored rather than becoming an unhandled rejection, same as the
   // senders' own `.catch(() => {})` already treats a failed send.
   const respond = () => { try { sendResponse(); } catch { /* sender gone, nothing to respond to */ } };
-  handled.then(respond).catch(respond);
+  // A handler failing used to be swallowed here with no trace - the page
+  // then counted the scrape as delivered and never resent it, so the
+  // Manifest silently went stale. Logged now (background console).
+  handled.then(respond).catch((err) => {
+    console.error(`Forged Space Shipping Manifest: "${msg.type}" failed.`, err);
+    respond();
+  });
   return true;
 });
