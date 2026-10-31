@@ -244,19 +244,19 @@
     },
     "cargo_capacity": 600,
     "expected_assembly_hours": {
-      "Gadget": 2.0,
-      "Widget": 2.0
+      "Gadget": 1,
+      "Widget": 2
     },
     "expected_expanded": {
-      "Copper Ore": 80.0,
-      "Gadget": 20.0,
-      "Iron Ore": 30.0,
+      "Copper Ore": 4.0,
+      "Gadget": 4.0,
+      "Iron Ore": 6.0,
       "Widget": 10
     },
     "expected_plan": {
       "assembly_hours": {
-        "Gadget": 2.0,
-        "Widget": 2.0
+        "Gadget": 1,
+        "Widget": 2
       },
       "harvest_hours": {},
       "harvest_rate": {},
@@ -267,9 +267,9 @@
         "Widget": "unknown"
       },
       "item_need": {
-        "Copper Ore": 80.0,
-        "Gadget": 20.0,
-        "Iron Ore": 30.0,
+        "Copper Ore": 4.0,
+        "Gadget": 4.0,
+        "Iron Ore": 6.0,
         "Widget": 10
       },
       "material_ore_choice": {
@@ -278,16 +278,16 @@
       },
       "ore_direct_raw": {},
       "ore_raw_needed": {
-        "Kelsalt": 400.0,
-        "Thracium": 150.0
-      },
-      "ore_target_refined": {
-        "Kelsalt": 80.0,
+        "Kelsalt": 20.0,
         "Thracium": 30.0
       },
+      "ore_target_refined": {
+        "Kelsalt": 4.0,
+        "Thracium": 6.0
+      },
       "ore_to_mine": {
-        "Kelsalt": 400.0,
-        "Thracium": 150.0
+        "Kelsalt": 20.0,
+        "Thracium": 30.0
       },
       "pending_batches": {},
       "pending_credit": {
@@ -295,7 +295,7 @@
         "Iron Ore": 0.0
       },
       "planet_hint": {},
-      "total_raw_to_mine": 550.0,
+      "total_raw_to_mine": 50.0,
       "trips": 1,
       "unresolved": {}
     },

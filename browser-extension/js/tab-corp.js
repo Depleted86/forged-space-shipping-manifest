@@ -347,7 +347,7 @@ export function initCorpTab(app, container) {
     clear(buildSelect);
     buildSelect.appendChild(el("option", { value: "", text: "(none selected)" }));
     for (const name of Object.keys(app.builds).sort()) {
-      buildSelect.appendChild(el("option", { value: name, text: `Build ${name}` }));
+      buildSelect.appendChild(el("option", { value: name, text: app.buildLabels[name] || `Build ${name}` }));
     }
     buildSelect.value = app.activeCorpBuildName || "";
   }

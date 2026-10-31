@@ -181,6 +181,7 @@ let blueprints = {};
 let assemblyPlans = {};
 let builds = {};
 let activeBuildName = null;
+let buildLabels = {}; // buildId -> custom display name, mirrors storage.js's `buildLabels` key
 
 // Scratch state for the blueprint editor - itemName -> qty, not persisted
 // until Save.
@@ -277,6 +278,7 @@ async function loadLiveData() {
   assemblyPlans = await storage.loadAssemblyPlans();
   builds = await storage.loadBuilds();
   activeBuildName = await storage.loadActiveBuildName();
+  buildLabels = await storage.loadBuildLabels();
 }
 
 export async function openAddBlueprintModal() {
@@ -447,7 +449,7 @@ function buildAddToPlanSection() {
     builds[activeBuildName] = builds[activeBuildName] || [];
     builds[activeBuildName].push(["blueprint", name, qty]);
     await storage.saveBuilds(builds);
-    status.textContent = `Added ${qty}× "${name}" to build "${activeBuildName}".`;
+    status.textContent = `Added ${qty}× "${name}" to build "${buildLabels[activeBuildName] || activeBuildName}".`;
     status.className = "fsc-status fsc-ok";
   }
   const addBlueprintBtn = el("button", { class: "fsc-primary", text: "Add", onclick: addBlueprintToPlan });
@@ -470,14 +472,14 @@ function buildAddToPlanSection() {
     await storage.saveBuilds(builds);
     materialInput.value = "";
     materialQtyInput.value = "1";
-    status.textContent = `Added ${qty}× "${name}" to build "${activeBuildName}".`;
+    status.textContent = `Added ${qty}× "${name}" to build "${buildLabels[activeBuildName] || activeBuildName}".`;
     status.className = "fsc-status fsc-ok";
   }
   const addItemBtn = el("button", { class: "fsc-primary", text: "Add", onclick: addMaterialToPlan });
 
   return el("div", {}, [
     title,
-    el("div", { class: "fsc-hint", text: `Adding to build "${activeBuildName}".` }),
+    el("div", { class: "fsc-hint", text: `Adding to build "${buildLabels[activeBuildName] || activeBuildName}".` }),
     el("div", { class: "fsc-field-row" }, [el("label", { text: "Blueprint:" }), addToPlanBlueprintSelect, blueprintQtyInput, addBlueprintBtn]),
     el("div", { class: "fsc-field-row" }, [el("label", { text: "Item:" }), materialInput, materialQtyInput, addItemBtn]),
     itemDatalist,

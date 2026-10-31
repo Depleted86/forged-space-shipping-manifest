@@ -25,6 +25,13 @@ export class Blueprint {
     // itself gates the "R&D Unlocked" list by); just displayed as a stat so
     // the player can judge for themselves whether they can queue it yet.
     this.captainLevel = null;
+    // From the game's Blueprint Store (see background.js's
+    // handleBlueprintStoreScrape()), or null for a hand-entered blueprint
+    // never seen there: { owned, copies, shipClass, buildLimit, price,
+    // basePrice, discountPct, buildCost, guideValue, mfgSkill } - credits,
+    // and the Manufacturing Skill needed to run it (detail panel only).
+    // Display-only - an unowned blueprint still counts in planning.
+    this.store = null;
   }
 
   setRequirement(itemName, qty) {
@@ -33,6 +40,12 @@ export class Blueprint {
     } else {
       this.requirements[itemName] = qty;
     }
+  }
+
+  // A blueprint added from the store list has no materials until it's
+  // opened in the store's detail panel (or entered by hand).
+  hasRecipe() {
+    return Object.keys(this.requirements).length > 0;
   }
 
   scaled(multiplier) {
@@ -44,20 +57,39 @@ export class Blueprint {
   }
 }
 
-// How a Commodity is produced at the Assembly. Unlike ore refining (discrete
-// batches), Assembly is a continuous rate: the facility makes `ratePerHour`
-// units of `outputItem` per hour, each unit costing `requirements` (per-unit
-// resource cost, not per-batch). Keyed by the commodity name it produces, so
-// the planner can look it up automatically whenever that commodity shows up
-// as a need.
+// How a Commodity is produced at the Assembly. Production happens in
+// one-hour runs: each run consumes `requirements` once (the ingredient list
+// exactly as the game's Assembly Facility screen lists it) and yields
+// `ratePerHour` units of `outputItem` - the game's "Rate (units/hour)"
+// column IS the output per run (confirmed with the user 2026-10-30: Circuit
+// Boards shows 5/hr, and 1 run's ingredients make 5 boards). Runs can't be
+// partial, so building N units takes ceil(N / ratePerHour) runs - see
+// runsFor(). Keyed by the commodity name it produces, so the planner can
+// look it up automatically whenever that commodity shows up as a need.
 export class AssemblyPlan {
   constructor(outputItem, ratePerHour) {
     this.outputItem = outputItem;
     this.ratePerHour = ratePerHour;
-    this.requirements = {}; // { itemName: qtyPerUnitOfOutput }
+    this.requirements = {}; // { itemName: qtyPerRun }
     // See Blueprint.captainLevel above - same informational-only stat, not
     // used by any calculation.
     this.captainLevel = null;
+    // R&D status from the game's R&D Office "Select Research Plan" list, or
+    // null for plans that aren't R&D-gated (or haven't been seen there):
+    // { level, skillRequired, progress, active } - level 0 means not yet
+    // researched, so the plan can't be queued at an Assembler. Display-only;
+    // a locked plan still counts in planning so players can plan ahead.
+    this.research = null;
+  }
+
+  isResearchLocked() {
+    return this.research != null && this.research.level === 0;
+  }
+
+  // A plan seen only on the R&D list has a name but no recipe until the
+  // Assembly Facility (or the player) supplies one - it can't be expanded.
+  hasRecipe() {
+    return Object.keys(this.requirements).length > 0;
   }
 
   setRequirement(itemName, qty) {
@@ -66,6 +98,15 @@ export class AssemblyPlan {
     } else {
       this.requirements[itemName] = qty;
     }
+  }
+
+  // Whole runs needed to produce `qty` units. A missing/zero rate falls back
+  // to 1 unit per run. The epsilon keeps float noise from an upstream
+  // multiplication (e.g. 10.000000001) from costing a whole extra run.
+  runsFor(qty) {
+    if (qty <= 0) return 0;
+    const perRun = this.ratePerHour > 0 ? this.ratePerHour : 1;
+    return Math.ceil(qty / perRun - 1e-9);
   }
 }
 
@@ -135,9 +176,9 @@ export class PlanResult {
 }
 
 // Cascades Commodity (unknown-kind) needs through their AssemblyPlan,
-// merging the per-unit input cost (scaled by however many units are still
-// needed) into the requirements pool, repeating until no further expansion
-// happens (inputs can themselves be commodities needing their own assembly)
+// merging the per-run input cost (scaled by the whole runs needed to cover
+// the outstanding units - see AssemblyPlan.runsFor()) into the requirements
+// pool, repeating until no further expansion happens (inputs can themselves be commodities needing their own assembly)
 // or maxPasses is hit (guards against a circular plan chain rather than
 // hanging).
 //
@@ -162,7 +203,7 @@ export function expandCommodities(catalog, requirements, assemblyPlans, inventor
   buyModes = buyModes || {};
   const expanded = { ...requirements };
   const assemblyHours = {};
-  const alreadyExpandedNeed = {}; // name -> need amount already cascaded, so growing demand across passes only adds the delta
+  const alreadyExpandedRuns = {}; // name -> runs already cascaded, so growing demand across passes only adds the delta
 
   for (let pass = 0; pass < maxPasses; pass++) {
     let expandedAny = false;
@@ -171,16 +212,18 @@ export function expandCommodities(catalog, requirements, assemblyPlans, inventor
       if (kind !== "unknown") continue;
       if (buyModes[name] === "buy") continue;
       const plan = assemblyPlans[name];
-      if (!plan) continue;
+      if (!plan || !plan.hasRecipe()) continue;
       const have = inventory.other[name] || 0;
       const need = Math.max(0.0, expanded[name] - have);
-      const prevNeed = alreadyExpandedNeed[name] || 0.0;
-      if (need <= prevNeed) continue;
-      const delta = need - prevNeed;
-      alreadyExpandedNeed[name] = need;
-      assemblyHours[name] = plan.ratePerHour > 0 ? need / plan.ratePerHour : null;
-      for (const [inputName, qtyPerUnit] of Object.entries(plan.requirements)) {
-        expanded[inputName] = (expanded[inputName] || 0.0) + qtyPerUnit * delta;
+      const runs = plan.runsFor(need);
+      const prevRuns = alreadyExpandedRuns[name] || 0;
+      if (runs <= prevRuns) continue;
+      const deltaRuns = runs - prevRuns;
+      alreadyExpandedRuns[name] = runs;
+      // Each run takes one hour (see AssemblyPlan).
+      assemblyHours[name] = plan.ratePerHour > 0 ? runs : null;
+      for (const [inputName, qtyPerRun] of Object.entries(plan.requirements)) {
+        expanded[inputName] = (expanded[inputName] || 0.0) + qtyPerRun * deltaRuns;
       }
       expandedAny = true;
     }
@@ -264,7 +307,7 @@ export function pendingRefiningOutput(catalog, pendingBatches) {
 //   already reflects the deduction once synced.
 // assemblyHours: { commodityName: number|null } hours needed at the Assembly
 //   to cover that commodity's need (see expandCommodities()). `requirements`
-//   should already include whatever those hours' per-unit inputs cascaded
+//   should already include whatever those hours' per-run inputs cascaded
 //   into - this param just tells planMining those commodities aren't
 //   actually unresolved.
 //
@@ -433,27 +476,22 @@ export function entriesToTotals(blueprints, entries) {
 // actually go mine and how many trips that takes. buyModes is threaded
 // through so a nested ingredient the player separately chose "buy" for
 // stops cascading here too, matching expandCommodities() itself - it shows
-// up as its own flat leaf line instead of being expanded further. A
-// qty-carrying recursive walk (not expandCommodities' pass-based loop) so
-// diamond-shaped Assembly Plans - two different ingredients both needing
-// the same base ore - correctly sum instead of only counting the first
-// occurrence; maxDepth guards a circular plan chain the same way
-// expandCommodities' maxPasses does.
+// up as its own flat leaf line instead of being expanded further. Runs
+// expandCommodities() itself against an empty inventory (rather than a
+// per-path recursive walk) because runs round up: a diamond-shaped plan -
+// two ingredients both needing the same sub-assembly - must round that
+// sub-assembly's COMBINED demand up to whole runs once, not once per path,
+// or this breakdown would disagree with the real plan totals.
 export function itemResourceBreakdown(catalog, itemName, need, assemblyPlans, buyModes, maxDepth = 20) {
   const plan = (assemblyPlans || {})[itemName];
-  if (!plan || need <= 0) return [];
-  buyModes = buyModes || {};
+  if (!plan || !plan.hasRecipe() || need <= 0) return [];
+  const { expanded, assemblyHours } = expandCommodities(catalog, { [itemName]: need }, assemblyPlans, new Inventory(), maxDepth, buyModes);
+  // Leaves only - anything that got cascaded into its own ingredients is an
+  // intermediate, already represented by those ingredients.
   const totals = {};
-  const walk = (name, qty, depth) => {
-    const [kind] = catalog.classify(name);
-    const nestedPlan = kind === "unknown" && buyModes[name] !== "buy" ? assemblyPlans[name] : null;
-    if (nestedPlan && depth < maxDepth) {
-      for (const [inputName, qtyPerUnit] of Object.entries(nestedPlan.requirements)) walk(inputName, qtyPerUnit * qty, depth + 1);
-      return;
-    }
-    totals[name] = (totals[name] || 0) + qty;
-  };
-  for (const [inputName, qtyPerUnit] of Object.entries(plan.requirements)) walk(inputName, qtyPerUnit * need, 1);
+  for (const [name, qty] of Object.entries(expanded)) {
+    if (!(name in assemblyHours)) totals[name] = qty;
+  }
 
   const rows = Object.entries(totals).map(([name, qty]) => {
     const [kind] = catalog.classify(name);

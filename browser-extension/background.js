@@ -41,7 +41,7 @@
 import "./js/browser-compat.js";
 import { Catalog } from "./js/catalog.js";
 import { applyItemsToInventory } from "./js/inventory-classify.js";
-import { AssemblyPlan, entriesToTotals, expandCommodities, harvesterTotals, itemResourceBreakdown, planMining, toStorableCorpData, toStorableToMineData } from "./js/calc-engine.js";
+import { AssemblyPlan, Blueprint, entriesToTotals, expandCommodities, harvesterTotals, itemResourceBreakdown, planMining, toStorableCorpData, toStorableToMineData } from "./js/calc-engine.js";
 import * as storage from "./js/storage.js";
 
 const catalog = new Catalog();
@@ -302,10 +302,10 @@ async function recalculateActiveBuildToMineData() {
 }
 
 // items: [{name, requirements, ratePerHour, captainLevel, rdLevel, rdMet}]
-// scraped from the Assembler Plans screen by content.js - both its "All
-// Plans" and "R&D Unlocked" filters feed here (the latter already
-// pre-filtered to rdMet rows there); everything on that screen is
-// Assembly-produced, so this only ever writes assemblyPlans, never
+// scraped from the Assembly Facility's Configure Production list by
+// content.js (which only shows plans the player already knows); everything
+// on that screen is Assembly-produced, so this only ever writes
+// assemblyPlans, never
 // blueprints (see tab-blueprints.js's own header comment - Blueprints stay
 // hand-entered only; a separate Item Database scrape for those was
 // explored and deliberately shelved as more complicated than it's worth).
@@ -328,6 +328,9 @@ async function handleAssemblerScrape(items) {
       if (!(existingName in scrapedReqs)) plan.setRequirement(existingName, 0);
     }
     plan.captainLevel = item.captainLevel ?? null;
+    // Listed at the Assembly Facility means it can be queued, so any
+    // "not researched" mark from the R&D list is out of date.
+    if (plan.research) plan.research = { ...plan.research, level: Math.max(plan.research.level, item.rdLevel ?? 1) };
     assemblyPlans[item.name] = plan;
   }
   await storage.saveAssemblyPlans(assemblyPlans);
@@ -335,6 +338,116 @@ async function handleAssemblerScrape(items) {
   await recalculateActiveBuildCorpData();
   await recalculateManifestSelection();
   await recalculateManifestCorpSelection();
+}
+
+// plans: [{name, level, skillRequired, progress, active}] scraped from the
+// R&D Office's "Select Research Plan" list by content.js - every research
+// plan in the game, level 0 meaning not researched yet. Plans not already
+// known are added with no recipe (the R&D list doesn't show one); the
+// Assembly Facility scrape fills it in once the plan unlocks. Each scrape
+// refreshes every listed plan's status, so a plan researched since the last
+// visit flips from locked to unlocked here. An Active row omits its skill
+// line, so the last known skillRequired is kept rather than wiped.
+async function handleResearchScrape(plans) {
+  const assemblyPlans = await storage.loadAssemblyPlans();
+  for (const scraped of plans || []) {
+    if (!scraped || !scraped.name) continue;
+    const plan = assemblyPlans[scraped.name] || new AssemblyPlan(scraped.name, 1);
+    plan.research = {
+      level: scraped.level || 0,
+      skillRequired: scraped.skillRequired ?? plan.research?.skillRequired ?? null,
+      progress: scraped.progress ?? null,
+      active: !!scraped.active,
+    };
+    assemblyPlans[scraped.name] = plan;
+  }
+  await storage.saveAssemblyPlans(assemblyPlans);
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
+// The Blueprints-tab key for a store name: an existing blueprint saved
+// under the exact store name keeps it, otherwise the trailing " Blueprint"
+// is dropped so the key reads as the item it builds ("Kinetic Autocannon").
+function blueprintKeyFor(storeName, blueprints) {
+  if (blueprints[storeName]) return storeName;
+  return storeName.replace(/\s+Blueprint$/i, "").trim();
+}
+
+// list: [{name, owned, copies, shipClass, buildLimit}] and detail:
+// {name, requirements}|null scraped from the Blueprint Store by content.js.
+// Every listed blueprint gets its ownership refreshed (added if new, with
+// no recipe); the one open in the detail panel gets its recipe replaced
+// with the store's, which is authoritative over a hand-entered one.
+async function handleBlueprintStoreScrape(list, detail) {
+  const blueprints = await storage.loadBlueprints();
+  for (const item of list || []) {
+    if (!item || !item.name) continue;
+    const key = blueprintKeyFor(item.name, blueprints);
+    const blueprint = blueprints[key] || new Blueprint(key);
+    // Merged so build cost/guide value from an earlier detail-panel scrape
+    // survive a list-only refresh.
+    blueprint.store = {
+      ...(blueprint.store || {}),
+      owned: !!item.owned,
+      copies: item.copies || 0,
+      shipClass: item.shipClass || null,
+      // Starship cards don't show a build limit; keep the detail panel's.
+      buildLimit: item.buildLimit ?? blueprint.store?.buildLimit ?? null,
+      price: item.price ?? null,
+      basePrice: item.basePrice ?? null,
+      discountPct: item.discountPct || 0,
+      engReq: item.engReq ?? blueprint.store?.engReq ?? null,
+    };
+    blueprints[key] = blueprint;
+  }
+  if (detail && detail.name && Object.keys(detail.requirements || {}).length > 0) {
+    const key = blueprintKeyFor(detail.name, blueprints);
+    const blueprint = blueprints[key] || new Blueprint(key);
+    for (const name of Object.keys(blueprint.requirements)) blueprint.setRequirement(name, 0);
+    for (const [name, qty] of Object.entries(detail.requirements)) blueprint.setRequirement(name, qty);
+    blueprint.store = {
+      ...(blueprint.store || {}),
+      buildCost: detail.buildCost ?? null,
+      guideValue: detail.guideValue ?? null,
+      mfgSkill: detail.mfgSkill ?? null,
+      shipValue: detail.shipValue ?? null,
+    };
+    if (detail.engReq != null) blueprint.store.engReq = detail.engReq;
+    if (detail.buildLimit != null) blueprint.store.buildLimit = detail.buildLimit;
+    // The Starship Blueprint Store's "Level Req" is the Captain level.
+    if (detail.levelReq != null) blueprint.captainLevel = detail.levelReq;
+    blueprints[key] = blueprint;
+  }
+  await storage.saveBlueprints(blueprints);
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
+// manufacturing: the player's Manufacturing skill level, scraped from the
+// Character Skills window by content.js; captain: their Captain level, from
+// the HUD. Either may be null (Skills window closed). Only written when one
+// changed, so the dashboard isn't told settings changed on every poll.
+async function handleSkillsScrape(manufacturing, engineering, captain) {
+  const settings = await storage.loadSettings();
+  let changed = false;
+  if (Number.isInteger(manufacturing) && manufacturing >= 0 && settings.manufacturing_skill !== manufacturing) {
+    settings.manufacturing_skill = manufacturing;
+    changed = true;
+  }
+  if (Number.isInteger(engineering) && engineering >= 0 && settings.engineering_skill !== engineering) {
+    settings.engineering_skill = engineering;
+    changed = true;
+  }
+  if (Number.isInteger(captain) && captain > 0 && settings.captain_level !== captain) {
+    settings.captain_level = captain;
+    changed = true;
+  }
+  if (changed) await storage.saveSettings(settings);
 }
 
 // items: [{name, description, resources}] scraped from the in-game Systems
@@ -440,7 +553,6 @@ async function recalculateManifestSelection() {
 
   const assemblyPlans = await storage.loadAssemblyPlans();
   const inventory = await storage.loadInventory(catalog);
-  const pendingRefining = await storage.loadPendingRefining();
   const settings = await storage.loadSettings();
   const maxHarvesters = Number(settings.max_harvesters || 4);
   const harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
@@ -450,8 +562,10 @@ async function recalculateManifestSelection() {
 
   const { expanded, assemblyHours } = expandCommodities(catalog, totals, assemblyPlans, inventory, 20, settings.item_acquisition_mode);
 
+  const selectionKey = storage.manifestSelectionKey(selection);
+
   const manifestOreChoices = await storage.loadManifestOreChoices();
-  const perSelectionChoices = manifestOreChoices[storage.manifestSelectionKey(selection)] || {};
+  const perSelectionChoices = manifestOreChoices[selectionKey] || {};
   const oreChoices = {};
   for (const [item, oreName] of Object.entries(perSelectionChoices)) {
     const ore = catalog.findOre(oreName);
@@ -462,7 +576,18 @@ async function recalculateManifestSelection() {
   // freshly-picked Blueprint/Build works with a sensible default before the
   // user ever touches an ore selector.
 
-  const result = planMining(catalog, expanded, inventory, oreChoices, cargoCapacity, harvesterTotals(harvesterSlots), pendingRefining, assemblyHours);
+  // Pending-refining batches are ALSO scoped per-selection here (see
+  // storage.js's manifestPendingBatches comment) - deliberately NOT the
+  // dashboard's global `pendingRefining` key. A batch started while working
+  // Blueprint A shouldn't silently credit Blueprint B's "how many more
+  // batches do I need" math just because they share an ore; the raw ore
+  // itself is still deducted from the one real shared inventory when the
+  // batch is entered (see handleSetManifestPendingBatches()), only the
+  // credit toward remaining need is scoped this way.
+  const manifestPendingBatches = await storage.loadManifestPendingBatches();
+  const pendingBatchesForSelection = manifestPendingBatches[selectionKey] || {};
+
+  const result = planMining(catalog, expanded, inventory, oreChoices, cargoCapacity, harvesterTotals(harvesterSlots), pendingBatchesForSelection, assemblyHours);
   const stored = toStorableToMineData(result, cargoCapacity);
   // Every entry in `stored.assembly` is, by construction, a "Farm" item -
   // expandCommodities() only cascades a commodity into assemblyHours (which
@@ -539,6 +664,86 @@ async function handleSetManifestOreChoice(materialName, oreName) {
   await recalculateManifestSelection();
 }
 
+// Lets the in-page Manifest overlay's own Batch control (js/overlay-
+// manifest.js) set exactly how many batches of an ore are currently
+// started, scoped to whichever Blueprint/Build the overlay has selected -
+// see storage.js's manifestPendingBatches comment for why this is
+// deliberately separate from handleSetPendingBatches() above (the
+// dashboard's global, shared pendingRefining). Same absolute-SET semantics
+// and the same optimistic raw-ore deduction as that function (the ore is
+// genuinely spent from the one real shared inventory regardless of which
+// selection's ledger is tracking it) - only the "credit toward remaining
+// need" ends up scoped per-selection, via recalculateManifestSelection()
+// reading manifestPendingBatches instead of pendingRefining.
+async function handleSetManifestPendingBatches(oreName, newBatches) {
+  const selection = await storage.loadManifestSelection();
+  const ore = catalog.findOre(oreName);
+  if (!selection || !ore || Number.isNaN(newBatches) || newBatches < 0) return;
+
+  const manifestPendingBatches = await storage.loadManifestPendingBatches();
+  const key = storage.manifestSelectionKey(selection);
+  const forSelection = { ...(manifestPendingBatches[key] || {}) };
+  const oldBatches = forSelection[oreName] || 0;
+  if (newBatches === oldBatches) return;
+
+  if (newBatches > oldBatches) {
+    // Same one-directional optimistic deduction as handleSetPendingBatches()
+    // - never reversed on a decrease, since a real sync is what actually
+    // confirms the ore is genuinely spent going forward.
+    const inventory = await storage.loadInventory(catalog);
+    const rawDelta = (newBatches - oldBatches) * ore.batch;
+    const current = inventory.rawOre.get(ore) || 0;
+    inventory.rawOre.set(ore, Math.max(0, current - rawDelta));
+    await storage.saveInventory(inventory);
+  }
+
+  if (newBatches <= 0) delete forSelection[oreName];
+  else forSelection[oreName] = newBatches;
+  if (Object.keys(forSelection).length > 0) manifestPendingBatches[key] = forSelection;
+  else delete manifestPendingBatches[key];
+  await storage.saveManifestPendingBatches(manifestPendingBatches);
+
+  // Inventory changed, so every pipeline that reads it needs a refresh - not
+  // just this overlay's own selection.
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
+// Lets the in-page Manifest overlay's "Mark Complete" button (js/overlay-
+// manifest.js) declare the currently-selected Blueprint/Build Order done:
+// clears its own per-selection batch counts and ore-source picks (see
+// storage.js's manifestPendingBatches/manifestOreChoices), then deselects so
+// the overlay falls back to its empty state instead of showing numbers for a
+// selection whose tracking data was just wiped. Deliberately never touches
+// the underlying Blueprint or Build Order itself - unlike the dashboard's
+// own "Mark Build Complete" (tab-plan.js), which deletes the build, this is
+// scoped entirely to the overlay's own tracking data, never the saved plan.
+// Never reverses any raw-ore inventory deduction already applied by past
+// batch entries, matching handleSetManifestPendingBatches()'s one-directional
+// policy above.
+async function handleMarkManifestSelectionComplete() {
+  const selection = await storage.loadManifestSelection();
+  if (!selection) return;
+  const key = storage.manifestSelectionKey(selection);
+
+  const manifestPendingBatches = await storage.loadManifestPendingBatches();
+  if (key in manifestPendingBatches) {
+    delete manifestPendingBatches[key];
+    await storage.saveManifestPendingBatches(manifestPendingBatches);
+  }
+
+  const manifestOreChoices = await storage.loadManifestOreChoices();
+  if (key in manifestOreChoices) {
+    delete manifestOreChoices[key];
+    await storage.saveManifestOreChoices(manifestOreChoices);
+  }
+
+  await storage.saveManifestSelection(null);
+  await recalculateManifestSelection();
+}
+
 // Returning `true` (and eventually calling sendResponse) - rather than just
 // firing the handler and letting the listener return undefined - keeps the
 // message port open, which is what tells Chrome's MV3 service worker there's
@@ -561,10 +766,15 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items);
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
+  else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
+  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail);
+  else if (msg.type === "fsc-skills-scrape") handled = handleSkillsScrape(msg.manufacturing, msg.engineering, msg.captain);
   else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
   else if (msg.type === "fsc-switch-manifest-selection") handled = handleSwitchManifestSelection(msg.selection);
   else if (msg.type === "fsc-set-manifest-ore-choice") handled = handleSetManifestOreChoice(msg.materialName, msg.oreName);
+  else if (msg.type === "fsc-set-manifest-pending-batches") handled = handleSetManifestPendingBatches(msg.oreName, msg.batches);
+  else if (msg.type === "fsc-mark-manifest-selection-complete") handled = handleMarkManifestSelectionComplete();
   else if (msg.type === "fsc-set-item-acquisition-mode") handled = handleSetItemAcquisitionMode(msg.itemName, msg.mode);
   else if (msg.type === "fsc-switch-manifest-corp-selection") handled = handleSwitchManifestCorpSelection(msg.selection);
   else if (msg.type === "fsc-refresh-manifest-corp-selection") handled = recalculateManifestCorpSelection();

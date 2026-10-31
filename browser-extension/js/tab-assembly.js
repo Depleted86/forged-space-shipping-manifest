@@ -1,5 +1,5 @@
 // Assembly tab - CRUD editor for AssemblyPlan objects (continuous
-// production rate + per-unit input costs). Near-mirror of tab-blueprints.js
+// production rate + per-run input costs). Near-mirror of tab-blueprints.js
 // with an added rate_per_hour field, per gui.py's _build_assembly_tab.
 
 import { el, clear, selectableRow, enableInlineAutocomplete } from "./dom-helpers.js";
@@ -13,6 +13,10 @@ export function initAssemblyTab(app, container) {
   // from an Assembler Plans import (see background.js's
   // handleAssemblerScrape()), never used to gate anything here.
   let editingCaptainLevel = null;
+  // R&D status from the R&D Office scrape (see background.js's
+  // handleResearchScrape()) - carried through edits untouched, like
+  // editingCaptainLevel.
+  let editingResearch = null;
 
   const listSelectLabel = el("label", { for: "assembly-list", class: "visually-hidden", text: "Saved Assembly Plans" });
   const listSelect = el("select", { id: "assembly-list", size: "20", class: "list-select" });
@@ -20,7 +24,7 @@ export function initAssemblyTab(app, container) {
   const outputDatalist = el("datalist", { id: outputDatalistId });
   // width:auto (overriding the global .field-row label 200px) + flex:1 on
   // the input, same treatment as Blueprints' "Blueprint name:" - so these
-  // two field-rows sit as close to their labels as "Item:"/"Qty per unit:"
+  // two field-rows sit as close to their labels as "Item:"/"Qty per run:"
   // do below, and outputInput stretches out to the same right edge as the
   // Add / Update button. rateInput stays a small fixed width like
   // inputQtyInput does - it's a short number, not a name field.
@@ -33,6 +37,7 @@ export function initAssemblyTab(app, container) {
   const rateLabel = el("label", { for: "assembly-rate-input", text: "Rate (units/hour):", style: "width: auto; white-space: nowrap;" });
   const rateInput = el("input", { id: "assembly-rate-input", type: "text", value: "1", style: "width:90px" });
   const capLevelInfo = el("div", { class: "status-text" });
+  const researchInfo = el("div", { class: "status-text" });
   const saveStatus = el("div", { class: "status-text" });
 
   // Shown only while there are zero Assembly Plans - a first-time player
@@ -48,12 +53,38 @@ export function initAssemblyTab(app, container) {
   function refreshEmptyStateHint() {
     emptyStateHint.textContent =
       Object.keys(app.assemblyPlans).length === 0
-        ? 'No Assembly Plans yet - in-game, go to Item Database → Assembler Plans, select "All Plans" first, then also select "R&D Unlocked". This tab fills in automatically from what you see there - no manual entry needed.'
+        ? 'No Assembly Plans yet - in-game, dock at a station with an Assembly service and open Assembly Facility (Configure Production). This tab fills in automatically from the plans listed there. Plans you haven\'t unlocked yet don\'t appear in-game, so add those by hand below.'
         : "";
   }
 
   function refreshCapLevelInfo() {
     capLevelInfo.textContent = editingCaptainLevel != null ? `Captain Level required: ${editingCaptainLevel}` : "";
+  }
+
+  // Short tag for the plan list, so locked/recipe-less plans stand out.
+  function listTag(plan) {
+    if (plan.isResearchLocked()) return " [not researched]";
+    if (!plan.hasRecipe()) return " [no recipe yet]";
+    return "";
+  }
+
+  function refreshResearchInfo() {
+    const r = editingResearch;
+    const plan = editingOutput ? app.assemblyPlans[editingOutput] : null;
+    const lines = [];
+    if (r && r.level === 0) {
+      let text = "R&D: not researched yet - this plan can't be built at an Assembler.";
+      if (r.skillRequired != null) text += ` Needs Research Skill ${r.skillRequired}.`;
+      if (r.progress) text += ` Research progress: ${r.progress}${r.active ? " (in progress)" : ""}.`;
+      lines.push(text);
+    } else if (r) {
+      lines.push(`R&D: researched to Level ${r.level}${r.progress ? ` (${r.progress} toward next level${r.active ? ", in progress" : ""})` : ""}.`);
+    }
+    if (plan && !plan.hasRecipe()) {
+      lines.push("Recipe not known yet - it imports automatically once the plan shows up in the in-game Assembly Facility, or enter it below.");
+    }
+    researchInfo.textContent = lines.join(" ");
+    researchInfo.className = `status-text ${r && r.level === 0 ? "status-warn" : ""}`;
   }
 
   // An Assembly Plan's own inputs can include another Assembly-produced
@@ -67,12 +98,12 @@ export function initAssemblyTab(app, container) {
   const inputItemLabel = el("label", { for: "assembly-input-item", text: "Item:" });
   const inputItemInput = el("input", { id: "assembly-input-item", type: "text", list: inputDatalistId, placeholder: "Start typing to search...", style: "flex: 1; min-width: 0;" });
   enableInlineAutocomplete(inputItemInput, inputItemCandidates);
-  const inputQtyLabel = el("label", { for: "assembly-input-qty", text: "Qty per unit:" });
+  const inputQtyLabel = el("label", { for: "assembly-input-qty", text: "Qty per run:" });
   const inputQtyInput = el("input", { id: "assembly-input-qty", type: "text", value: "1", style: "width:70px" });
 
   const reqTbody = el("tbody");
   const reqTable = el("table", { class: "data-table" }, [
-    el("thead", {}, [el("tr", {}, ["Input Item", "Kind", "Qty per unit"].map((h) => el("th", { text: h })))]),
+    el("thead", {}, [el("tr", {}, ["Input Item", "Kind", "Qty per run"].map((h) => el("th", { text: h })))]),
     reqTbody,
   ]);
 
@@ -101,7 +132,7 @@ export function initAssemblyTab(app, container) {
   function refreshListbox() {
     clear(listSelect);
     for (const name of Object.keys(app.assemblyPlans).sort()) {
-      listSelect.appendChild(el("option", { value: name, text: name, selected: name === editingOutput ? "" : undefined }));
+      listSelect.appendChild(el("option", { value: name, text: name + listTag(app.assemblyPlans[name]), selected: name === editingOutput ? "" : undefined }));
     }
     listSelect.value = editingOutput || "";
   }
@@ -126,6 +157,7 @@ export function initAssemblyTab(app, container) {
     editingOutput = null;
     editingRequirements = {};
     editingCaptainLevel = null;
+    editingResearch = null;
     outputInput.value = "";
     rateInput.value = "1";
     inputItemInput.value = "";
@@ -134,6 +166,7 @@ export function initAssemblyTab(app, container) {
     refreshTree();
     refreshListbox();
     refreshCapLevelInfo();
+    refreshResearchInfo();
   }
 
   function newPlan() {
@@ -161,12 +194,14 @@ export function initAssemblyTab(app, container) {
     const plan = app.assemblyPlans[name];
     editingRequirements = { ...(plan?.requirements || {}) };
     editingCaptainLevel = plan?.captainLevel ?? null;
+    editingResearch = plan?.research ?? null;
     outputInput.value = name;
     rateInput.value = String(plan?.ratePerHour ?? 1);
     saveStatus.textContent = "";
     refreshTree();
     refreshListbox();
     refreshCapLevelInfo();
+    refreshResearchInfo();
   }
 
   function addInput() {
@@ -208,6 +243,7 @@ export function initAssemblyTab(app, container) {
     const plan = new AssemblyPlan(outputItem, rate);
     for (const [itemName, qty] of Object.entries(editingRequirements)) plan.setRequirement(itemName, qty);
     plan.captainLevel = editingCaptainLevel;
+    plan.research = editingResearch;
     if (editingOutput && editingOutput !== outputItem) delete app.assemblyPlans[editingOutput];
     app.assemblyPlans[outputItem] = plan;
     await storage.saveAssemblyPlans(app.assemblyPlans);
@@ -236,11 +272,12 @@ export function initAssemblyTab(app, container) {
         ]),
       ]),
       el("div", { class: "detail-panel" }, [
-        el("div", { class: "hint", text: "Assembly produces a Commodity at a continuous rate (units/hour), each unit costing the listed inputs." }),
+        el("div", { class: "hint", text: "Assembly produces a Commodity in one-hour runs: each run costs the listed inputs once and yields Rate (units/hour) units." }),
         el("div", { class: "field-row" }, [outputLabel, outputInput]),
         outputDatalist,
         el("div", { class: "field-row" }, [rateLabel, rateInput]),
         capLevelInfo,
+        researchInfo,
         el("div", { class: "toolbar" }, [inputItemLabel, inputItemInput, inputQtyLabel, inputQtyInput, el("button", { text: "Add / Update", onclick: addInput })]),
         inputDatalist,
         el("div", { class: "scroll-table" }, [reqTable]),
@@ -257,6 +294,7 @@ export function initAssemblyTab(app, container) {
   refreshListbox();
   refreshTree();
   refreshCapLevelInfo();
+  refreshResearchInfo();
   refreshEmptyStateHint();
 
   // Also refreshes the saved-list (not the in-progress edit form) when
@@ -266,5 +304,11 @@ export function initAssemblyTab(app, container) {
     refreshOutputChoices();
     refreshListbox();
     refreshEmptyStateHint();
+    // R&D status isn't editable in the form, so it's safe to pick up a fresh
+    // scrape for the plan being viewed (e.g. it just got unlocked).
+    if (editingOutput && app.assemblyPlans[editingOutput]) {
+      editingResearch = app.assemblyPlans[editingOutput].research ?? null;
+      refreshResearchInfo();
+    }
   };
 }

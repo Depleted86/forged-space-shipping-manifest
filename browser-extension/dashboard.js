@@ -38,6 +38,7 @@ const app = {
   pendingRefining: {},
   assemblyPlans: {},
   builds: {},
+  buildLabels: {},
   activeBuildName: null,
   corpInventory: {},
   corpHaveOverrides: {},
@@ -79,6 +80,7 @@ async function bootstrap() {
   app.pendingRefining = await storage.loadPendingRefining();
   app.assemblyPlans = await storage.loadAssemblyPlans();
   app.builds = await storage.loadBuilds();
+  app.buildLabels = await storage.loadBuildLabels();
   app.corpInventory = await storage.loadCorpInventory();
   app.corpHaveOverrides = await storage.loadCorpHaveOverrides();
   app.activeCorpBuildName = await storage.loadActiveCorpBuildName();
@@ -165,6 +167,7 @@ async function bootstrap() {
         app.settings = settings;
         app.maxHarvesters = Number(settings.max_harvesters || app.maxHarvesters);
         if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
+        if (app.refreshHooks.blueprintsSkill) app.refreshHooks.blueprintsSkill();
       });
     }
     // A fresh Systems Lexicon scrape (background.js's handleLexiconPlanetsScrape())
@@ -187,6 +190,18 @@ async function bootstrap() {
     if (changes.builds) {
       storage.loadBuilds().then((builds) => {
         app.builds = builds;
+        if (app.refreshHooks.corp) app.refreshHooks.corp();
+      });
+    }
+    // A build may have been renamed - either from this exact tab (which
+    // already refreshes itself directly after its own rename, same as the
+    // "changes.builds" comment above), or from a second dashboard window.
+    // Corp's build dropdown shows the same labels, so it needs the same
+    // refresh treatment as changes.builds above.
+    if (changes.buildLabels) {
+      storage.loadBuildLabels().then((labels) => {
+        app.buildLabels = labels;
+        if (app.refreshHooks.planBuildLabels) app.refreshHooks.planBuildLabels();
         if (app.refreshHooks.corp) app.refreshHooks.corp();
       });
     }

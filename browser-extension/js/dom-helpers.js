@@ -4,13 +4,17 @@
 // innerHTML, so scraped/externally-sourced names can never be interpreted
 // as markup (see the XSS guardrail note in the migration plan).
 
-// "1052.6h" alone doesn't quantify well at a glance - pairs it with a days
-// conversion, e.g. "1052.6h (43.9 days)". Originally local to tab-plan.js
-// (used for its own assembly/harvest ETA columns); moved here so the
-// Manifest overlay's Planetary/Assembly rows (js/overlay-manifest.js) can
-// show the same format instead of raw hours.
+// "1052.6h" alone doesn't quantify well at a glance, but showing both units
+// together ("1052.6h (43.9 days)") is redundant clutter once the number is
+// large - so this shows ONE unit, whichever reads better at that magnitude:
+// days for anything 48h/2 days or more, plain hours below that (a 43.6-day
+// wait doesn't need hour precision; a 6h wait doesn't need "0.3 days").
+// Originally local to tab-plan.js (used for its own assembly/harvest ETA
+// columns); moved here so the Manifest overlay's Planetary/Assembly rows
+// (js/overlay-manifest.js) show the exact same format instead of raw hours.
 export function formatHours(hours) {
-  return `${hours.toFixed(1)}h (${(hours / 24).toFixed(1)} days)`;
+  if (hours >= 48) return `${(hours / 24).toFixed(1)} days`;
+  return `${hours.toFixed(1)}h`;
 }
 
 export function el(tag, props = {}, children = []) {

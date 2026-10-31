@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { Catalog } from "../js/catalog.js";
-import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan } from "../js/calc-engine.js";
+import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown } from "../js/calc-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(readFileSync(join(__dirname, "fixtures.json"), "utf8"));
@@ -144,4 +144,58 @@ test("scenario F: material with no ore_choices entry falls back to sources[0]", 
 test("scenario G: harvesterTotals sums rate per resource, skips idle slots", () => {
   const fx = fixtures.scenario_g_harvester_totals;
   assert.deepEqual(harvesterTotals(fx.slots), fx.expected);
+});
+
+// Assembly runs: the game's Rate (units/hour) is the output of one run, and
+// the listed ingredients are the cost of that one run - not per unit.
+function circuitBoardPlans() {
+  const boards = new AssemblyPlan("Circuit Boards", 5);
+  boards.setRequirement("Copper Ore", 1);
+  const panel = new AssemblyPlan("Control Panel", 1);
+  panel.setRequirement("Circuit Boards", 3);
+  const relay = new AssemblyPlan("Relay", 1);
+  relay.setRequirement("Circuit Boards", 3);
+  return { "Circuit Boards": boards, "Control Panel": panel, Relay: relay };
+}
+
+test("assembly runs: 5 Circuit Boards = 1 run's ingredients, 6 rounds up to 2 runs", () => {
+  const catalog = new Catalog();
+  const plans = circuitBoardPlans();
+  let { expanded, assemblyHours } = expandCommodities(catalog, { "Circuit Boards": 5 }, plans, new Inventory());
+  assert.equal(expanded["Copper Ore"], 1);
+  assert.equal(assemblyHours["Circuit Boards"], 1);
+  ({ expanded, assemblyHours } = expandCommodities(catalog, { "Circuit Boards": 6 }, plans, new Inventory()));
+  assert.equal(expanded["Copper Ore"], 2);
+  assert.equal(assemblyHours["Circuit Boards"], 2);
+});
+
+test("assembly runs: shared sub-assembly rounds its combined demand once, in plan and breakdown alike", () => {
+  const catalog = new Catalog();
+  const plans = circuitBoardPlans();
+  // 2 boards via each path = 4 total -> 1 run. Rounding per path instead
+  // would wrongly give ceil(2/5) + ceil(2/5) = 2 runs.
+  plans["Control Panel"].setRequirement("Circuit Boards", 2);
+  plans.Relay.setRequirement("Circuit Boards", 2);
+  const console_ = new AssemblyPlan("Console", 1);
+  console_.setRequirement("Control Panel", 1);
+  console_.setRequirement("Relay", 1);
+  plans.Console = console_;
+
+  const { expanded } = expandCommodities(catalog, { Console: 1 }, plans, new Inventory());
+  assert.equal(expanded["Circuit Boards"], 4);
+  assert.equal(expanded["Copper Ore"], 1);
+  const rows = itemResourceBreakdown(catalog, "Console", 1, plans, {});
+  assert.deepEqual(rows.map((r) => [r.name, r.need]), [["Copper Ore", 1]]);
+});
+
+test("R&D-only plan (no recipe yet) stays a flat need instead of expanding to nothing", () => {
+  const catalog = new Catalog();
+  const plan = new AssemblyPlan("Platinum Chips", 1);
+  plan.research = { level: 0, skillRequired: 11, progress: null, active: false };
+  assert.equal(plan.isResearchLocked(), true);
+  assert.equal(plan.hasRecipe(), false);
+  const { expanded, assemblyHours } = expandCommodities(catalog, { "Platinum Chips": 27 }, { "Platinum Chips": plan }, new Inventory());
+  assert.deepEqual(expanded, { "Platinum Chips": 27 });
+  assert.deepEqual(assemblyHours, {});
+  assert.deepEqual(itemResourceBreakdown(catalog, "Platinum Chips", 27, { "Platinum Chips": plan }, {}), []);
 });

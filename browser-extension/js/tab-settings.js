@@ -27,26 +27,44 @@ export function initSettingsTab(app, container) {
   ]);
   hasOreHoldInput.addEventListener("change", () => {
     oreHoldCapacityRow.style.display = hasOreHoldInput.checked ? "" : "none";
+    // Immediate, not debounced - a checkbox toggle has no "still typing" to
+    // wait out, unlike the text fields below. autoSaveNow() is declared
+    // later in this function but safe to reference here - function
+    // declarations are hoisted, and this callback only ever actually runs
+    // on a later "change" event, well after everything's initialized.
+    autoSaveNow();
   });
 
   const statusText = el("div", { class: "status-text" });
 
+  // Auto-save, standardized with how the rest of the app already behaves
+  // (the harvester roster below commits on blur/change with no Save button;
+  // every Manifest overlay control applies instantly) - this tab was the
+  // odd one out, requiring an explicit click. Errors surface inline in
+  // statusText instead of alert() - a blocking modal firing mid-typing (or
+  // on every debounced tick while a field is momentarily invalid) would be
+  // far more disruptive here than it was as a one-shot button-click check.
+  // An invalid field simply isn't persisted (whatever was last validly
+  // saved stays in storage) until it's fixed.
   async function save() {
     const cargo = parseFloat(cargoInput.value);
     if (Number.isNaN(cargo) || cargo <= 0) {
-      alert("Cargo capacity must be a positive number.");
+      statusText.textContent = "Cargo capacity must be a positive number.";
+      statusText.className = "status-text status-warn";
       return;
     }
     const maxHarvesters = parseInt(maxHarvestersInput.value, 10);
     if (Number.isNaN(maxHarvesters) || maxHarvesters <= 0) {
-      alert("Max harvesters must be a positive whole number.");
+      statusText.textContent = "Max harvesters must be a positive whole number.";
+      statusText.className = "status-text status-warn";
       return;
     }
     let oreHoldCapacity = app.settings.ore_hold_capacity;
     if (hasOreHoldInput.checked) {
       oreHoldCapacity = parseFloat(oreHoldCapacityInput.value);
       if (Number.isNaN(oreHoldCapacity) || oreHoldCapacity <= 0) {
-        alert("Ore Hold capacity must be a positive number.");
+        statusText.textContent = "Ore Hold capacity must be a positive number.";
+        statusText.className = "status-text status-warn";
         return;
       }
     }
@@ -69,7 +87,31 @@ export function initSettingsTab(app, container) {
     if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
 
     statusText.textContent = "Settings saved.";
-    statusText.className = "status-ok";
+    statusText.className = "status-text status-ok";
+  }
+
+  // "After entry has stopped" - debounced, not per-keystroke (parseFloat
+  // running, and a save round-trip firing, on every single character while
+  // someone's still mid-typing "600" would be wasteful and could flash a
+  // spurious validation error at intermediate states). blur() saves
+  // immediately (matches the harvester roster's own commit-on-blur below) so
+  // tabbing away doesn't sit waiting on the debounce timer for no reason.
+  const AUTOSAVE_DEBOUNCE_MS = 600;
+  let debounceTimer = null;
+  function autoSaveDebounced() {
+    clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(save, AUTOSAVE_DEBOUNCE_MS);
+  }
+  function autoSaveNow() {
+    clearTimeout(debounceTimer);
+    save();
+  }
+  for (const input of [cargoInput, oreHoldCapacityInput, maxHarvestersInput]) {
+    input.addEventListener("input", autoSaveDebounced);
+    input.addEventListener("blur", autoSaveNow);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") autoSaveNow();
+    });
   }
 
   // --- Backup & restore ---
@@ -92,6 +134,7 @@ export function initSettingsTab(app, container) {
     "pendingRefining",
     "assemblyPlans",
     "builds",
+    "buildLabels",
     "activeBuildName",
     "corpInventory",
     "activeCorpBuildName",
@@ -152,7 +195,7 @@ export function initSettingsTab(app, container) {
   const welcomeHint = app.isFirstLaunch
     ? el("div", {
         class: "hint",
-        text: "Welcome! Fill in your cargo capacity (and Ore Hold, if your ship has one) and max harvesters below, then hit Save - these drive every trip and mining calculation across the app.",
+        text: "Welcome! Fill in your cargo capacity (and Ore Hold, if your ship has one) and max harvesters below - saved automatically as you go - these drive every trip and mining calculation across the app.",
       })
     : null;
 
@@ -163,7 +206,6 @@ export function initSettingsTab(app, container) {
       el("div", { class: "field-row" }, [el("label", { text: "Do you have an Ore Hold?" }), hasOreHoldInput]),
       oreHoldCapacityRow,
       el("div", { class: "field-row" }, [el("label", { text: "Max harvesters at once:" }), maxHarvestersInput]),
-      el("div", { class: "toolbar" }, [el("button", { text: "Save", onclick: save })]),
       statusText,
       el("h3", { class: "section-title", text: "Backup & restore" }),
       el("div", { class: "hint", text: "Export everything (blueprints, inventory, settings, builds, etc.) as JSON, or paste a previous export back in to restore it." }),

@@ -174,140 +174,372 @@ function checkStorage() {
     .catch(() => {});
 }
 
-// Assembler Plans screen: a reference database of every producible item -
-// its ingredient breakdown, output rate, and two INDEPENDENT unlock gates
-// (Captain Level and R&D, never both on the same row in practice) - that's
-// fully browsable regardless of progress, unlike storage/Corp Store which
-// reflect live, changing state. The game itself offers three sidebar
-// filters over this same data - "All Plans", "Captain Level", "R&D
-// Unlocked" - and this only ever reads whichever one the player has
-// currently selected (see activeAssemblerFilter()); it never clicks a
-// filter button itself, since that would be automating the page rather
-// than just reading it.
+// Assembly Facility > Configure Production: the list of plans the player
+// can queue at an Assembler, one card per plan - name, output rate,
+// unlock gates, and a "Required Resources" chip list. Coops removed the old
+// Item Database > Assembler Plans screen (a browsable database of EVERY
+// plan) in the late-October 2026 update; this panel replaced it as the only
+// place recipes appear, and it lists only plans the player already knows.
+// That's fine here because handleAssemblerScrape() in background.js only
+// ever adds/updates the plans it's sent and never prunes the rest, so plans
+// imported earlier (or hand-entered) for still-locked items are kept.
 //
-// Both "All Plans" and "R&D Unlocked" feed the Assembly tab only (see
-// checkAssemblerPlans() below) - never the Blueprints tab, which is
-// hand-entered only. "R&D Unlocked" additionally guards on each row's own
-// R&D checkmark (see parseRdUnlock()), not just trust in which sidebar
-// filter is active, since only R&D-gated items actually researched can be
-// queued there. Captain-Level-gated items have no
-// met/unmet indicator in the markup at all (just a bare "Lv N" or "—"), so
-// captainLevel is carried through as a display-only stat rather than used
-// to gate anything - the player judges that for themselves.
-const ASSEMBLER_ROW_SELECTOR = 'div[class*="cursor-pointer"][class*="py-2.5"][style*="1fr 160px 80px 90px 170px 90px 80px"]';
-const ASSEMBLER_FILTER_LABELS = ["All Plans", "R&D Unlocked", "Captain Level"];
+// Cards are found by their "Required Resources" label text rather than by
+// Tailwind classes or grid widths - the previous scraper keyed on an exact
+// grid-template string and broke silently the moment the layout changed.
+// Category filter tabs (All/Drones/Commodities/...) just show a subset of
+// the same cards, so whichever tab is open is scraped as-is - it never
+// clicks a tab itself, since that would be automating the page rather than
+// just reading it. Both the Personal and Corporation tabs show the same
+// plans. Feeds the Assembly tab only - Blueprints stay hand-entered (see
+// js/tab-blueprints.js).
+const ASSEMBLER_PANEL_TITLE = "Assembly Facility";
+const ASSEMBLER_RESOURCES_LABEL = /^Required Resources\b/i;
 const ASSEMBLER_POLL_MS = 2000;
+
+// "8x White Iron" -> ["White Iron", 8]
+function parseResourceChip(text) {
+  const match = (text || "").trim().match(/^([\d,.]+)\s*x\s+(.+)$/i);
+  if (!match) return null;
+  const qty = parseFloat(match[1].replace(/,/g, ""));
+  const name = match[2].trim();
+  return name && !Number.isNaN(qty) ? [name, qty] : null;
+}
+
+// "2/hour" or "7/hr" -> number, anything else -> null. An R&D-boosted card
+// shows the base rate struck through in its own element ("5") followed by
+// the effective one ("7/hr") - only the latter carries the "/hr" suffix, so
+// it's the one that matches. That effective rate is what this player's
+// Assembler actually yields per run, so it's the one stored.
+function parseRate(text) {
+  const match = (text || "").trim().match(/^([\d,.]+)\s*\/\s*(?:hour|hr)$/i);
+  return match ? parseFloat(match[1].replace(/,/g, "")) : null;
+}
 
 let lastAssemblerSnapshot = null;
 
-// Reads which of the three sidebar filter buttons is currently selected
-// (highlighted) - purely a read of existing page state, never a click.
-function activeAssemblerFilter() {
-  const buttons = document.querySelectorAll("button");
-  for (const btn of buttons) {
-    const text = btn.textContent.trim();
-    if (ASSEMBLER_FILTER_LABELS.includes(text) && btn.className.includes("bg-cyan-500/20")) {
-      return text;
+function isAssemblyFacilityOpen() {
+  for (const h2 of document.querySelectorAll("h2")) {
+    if (h2.textContent.trim().startsWith(ASSEMBLER_PANEL_TITLE)) return true;
+  }
+  return false;
+}
+
+// Walks up from a card's "Required Resources" label to the card itself:
+// the nearest ancestor that also contains the plan's <h4> name.
+function assemblerCardFor(labelEl) {
+  let el = labelEl.parentElement;
+  while (el && !el.querySelector("h4")) el = el.parentElement;
+  return el;
+}
+
+function scrapeAssemblerCards() {
+  const items = [];
+  for (const label of document.querySelectorAll("p")) {
+    if (!ASSEMBLER_RESOURCES_LABEL.test(label.textContent.trim())) continue;
+    const card = assemblerCardFor(label);
+    if (!card) continue;
+    const name = card.querySelector("h4").textContent.trim();
+    if (!name) continue;
+
+    const requirements = {};
+    const chipList = label.nextElementSibling;
+    for (const chip of chipList ? chipList.children : []) {
+      const parsed = parseResourceChip(chip.textContent);
+      if (parsed) requirements[parsed[0]] = parsed[1];
+    }
+    if (Object.keys(requirements).length === 0) continue;
+
+    let ratePerHour = null;
+    let captainLevel = null;
+    let rdLevel = null;
+    // Leaf elements only, so a wrapper's concatenated text ("57/hr(+50%)")
+    // never shadows the individual values.
+    for (const el of card.querySelectorAll("p, span")) {
+      if (el.children.length > 0) continue;
+      const text = el.textContent.trim();
+      const rate = parseRate(text);
+      if (rate !== null && ratePerHour === null) ratePerHour = rate;
+      const cap = text.match(/^Req:\s*Captain\s*Lv\s*(\d+)$/i);
+      if (cap) captainLevel = parseInt(cap[1], 10);
+      const rd = text.match(/^R&D\s*Level\s*(\d+)$/i);
+      if (rd) rdLevel = parseInt(rd[1], 10);
+    }
+    // This screen only lists plans the player has, so an R&D gate shown
+    // here is one already researched.
+    items.push({ name, requirements, ratePerHour, captainLevel, rdLevel, rdMet: rdLevel !== null });
+  }
+  return items;
+}
+
+function checkAssemblerPlans() {
+  if (!isAssemblyFacilityOpen()) return;
+  const items = scrapeAssemblerCards();
+  if (items.length === 0) return;
+  const snapshot = JSON.stringify(items);
+  if (snapshot === lastAssemblerSnapshot) return;
+  // Only marked "sent" once background.js actually confirms it - see
+  // checkCorpStore()'s comment for why. Plans rarely change, so a dropped
+  // send would never get superseded by a later, different snapshot - the
+  // poll loop would just keep matching "already sent" with nothing saved.
+  browser.runtime
+    .sendMessage({ type: "fsc-assembler-scrape", items })
+    .then(() => { lastAssemblerSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// R&D Office > Select Research Plan: every research plan in the game,
+// researched or not, each row showing its name, an "Lv.N" badge once
+// researched, the Research Skill it needs, and progress if it's being
+// researched. No recipes here - this is where locked plans come from, so the
+// Assembly tab can list them (marked locked) before the Assembly Facility
+// ever shows them. Opened via an empty slot's "Select Plan" button.
+const RESEARCH_PANEL_TITLE = "Select Research Plan";
+let lastResearchSnapshot = null;
+
+function researchPanel() {
+  for (const h3 of document.querySelectorAll("h3")) {
+    if (h3.textContent.trim() === RESEARCH_PANEL_TITLE) return h3.parentElement;
+  }
+  return null;
+}
+
+// The row for a plan name: the outermost ancestor that still contains only
+// this one <h4>, so no layout classes are needed to find it.
+function researchRowFor(h4, panel) {
+  let row = h4;
+  while (row.parentElement && row.parentElement !== panel && row.parentElement.querySelectorAll("h4").length === 1) {
+    row = row.parentElement;
+  }
+  return row;
+}
+
+function scrapeResearchPlans() {
+  const panel = researchPanel();
+  if (!panel) return [];
+  const plans = [];
+  for (const h4 of panel.querySelectorAll("h4")) {
+    const name = h4.textContent.trim();
+    if (!name) continue;
+    let level = 0;
+    let skillRequired = null;
+    let progress = null;
+    let active = false;
+    for (const el of researchRowFor(h4, panel).querySelectorAll("span, p, div")) {
+      if (el.children.length > 0) continue;
+      const text = el.textContent.trim();
+      const lv = text.match(/^Lv\.?\s*(\d+)$/i);
+      if (lv) level = parseInt(lv[1], 10);
+      const skill = text.match(/^Requires Research Skill Level\s*(\d+)$/i);
+      if (skill) skillRequired = parseInt(skill[1], 10);
+      if (/^\d+\s*\/\s*\d+%$/.test(text)) progress = text.replace(/\s+/g, "");
+      if (text === "Active") active = true;
+    }
+    plans.push({ name, level, skillRequired, progress, active });
+  }
+  return plans;
+}
+
+function checkResearchPlans() {
+  const plans = scrapeResearchPlans();
+  if (plans.length === 0) return;
+  const snapshot = JSON.stringify(plans);
+  if (snapshot === lastResearchSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-research-scrape", plans })
+    .then(() => { lastResearchSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// Blueprint Store (Promenade > Blueprint Store): a list of every blueprint
+// the station sells, each card showing name, ship class, build limit and
+// an "OWNED (N copies)" badge when the player has it - plus a detail panel
+// for whichever card is selected, with its "Resource Requirements" (the
+// materials to manufacture one). The list feeds ownership for every
+// blueprint; the detail panel feeds the recipe of the one being viewed.
+// The Starship Blueprint Store (on planets) is the same layout with a few
+// differences: prices in "CR", "OWNED (N)" with no "copies", no build limit
+// or Manufacturing Skill on the cards, and a "Level Req" / "Ship Value" /
+// "Build Limit: N uses" in the detail panel instead. Auxiliary Systems
+// (repairers and shield projectors) is the regular layout under its own title.
+// Module stores are titled by manufacturer ("Kriton Blueprints"), so any
+// title ending in " Blueprints" counts; their cards say "Builds: N" for the
+// build limit and "Eng Lvl N" for the Engineering needed to fit the module.
+const BLUEPRINT_STORE_TITLES = ["Blueprint Store", "Starship Blueprint Store", "Auxiliary Systems"];
+
+function isBlueprintStoreTitle(text) {
+  return BLUEPRINT_STORE_TITLES.includes(text) || /\sBlueprints$/.test(text);
+}
+let lastBlueprintStoreSnapshot = null;
+
+function blueprintStorePanel() {
+  for (const h3 of document.querySelectorAll("h3")) {
+    // The title <h3> also holds a help button, so match on its own text.
+    if (h3.firstChild && isBlueprintStoreTitle(h3.firstChild.textContent.trim())) {
+      return h3.closest("[data-panel-open]") || h3.parentElement.parentElement.parentElement;
     }
   }
   return null;
 }
 
-// "Zephyr Flux ×8 · Geolith Fragments ×8 · Exotic Osmite ×4 · Malifinum ×13"
-// -> { "Zephyr Flux": 8, "Geolith Fragments": 8, ... }
-function parseIngredients(text) {
-  const requirements = {};
-  if (!text) return requirements;
-  for (const part of text.split("·")) {
-    const match = part.trim().match(/^(.*?)\s*×\s*([\d,.]+)$/);
-    if (!match) continue;
-    const name = match[1].trim();
-    const qty = parseFloat(match[2].replace(/,/g, ""));
-    if (!name || Number.isNaN(qty)) continue;
-    requirements[name] = qty;
+// Outermost ancestor still holding only this one <h3> - a list card, the
+// detail panel, or the title bar, depending on which <h3> it started from.
+function outermostSingleH3(h3, panel) {
+  let el = h3;
+  while (el.parentElement && el.parentElement !== panel && el.parentElement.querySelectorAll("h3").length === 1) {
+    el = el.parentElement;
   }
-  return requirements;
+  return el;
 }
 
-// "4/hr" -> 4, "—" -> null
-function parseRate(text) {
-  const match = (text || "").trim().match(/^([\d,.]+)\/hr$/);
-  return match ? parseFloat(match[1].replace(/,/g, "")) : null;
-}
-
-// "Lv 5" -> 5, "—" -> null
-function parseCapLevel(text) {
-  const match = (text || "").trim().match(/^Lv\s*(\d+)$/);
-  return match ? parseInt(match[1], 10) : null;
-}
-
-// The R&D Unlock cell is either a plain "—" (no R&D gate on this item at
-// all) or a checkmark icon + "R&D Lv N" text (gate met - no example of an
-// unmet-but-visible R&D row has been seen, so absence of the checkmark icon
-// is treated as "not met" defensively).
-function parseRdUnlock(cell) {
-  if (!cell) return { level: null, met: false };
-  const met = !!cell.querySelector(".lucide-circle-check");
-  const levelText = cell.textContent || "";
-  const match = levelText.match(/R&D\s*Lv\s*(\d+)/i);
-  return { level: match ? parseInt(match[1], 10) : null, met };
-}
-
-function scrapeAssemblerRows() {
-  const rows = document.querySelectorAll(ASSEMBLER_ROW_SELECTOR);
-  const items = [];
-  rows.forEach((row) => {
-    const cells = row.children;
-    if (cells.length < 5) return;
-    const infoEl = cells[0];
-    const nameEl = infoEl.children[0];
-    const ingredientsEl = infoEl.children[1];
-    if (!nameEl) return;
-    const name = nameEl.textContent.trim();
-    if (!name) return;
-    const requirements = parseIngredients(ingredientsEl ? ingredientsEl.textContent : "");
-    const ratePerHour = parseRate(cells[2] ? cells[2].textContent : "");
-    const captainLevel = parseCapLevel(cells[3] ? cells[3].textContent : "");
-    const { level: rdLevel, met: rdMet } = parseRdUnlock(cells[4]);
-    items.push({ name, requirements, ratePerHour, captainLevel, rdLevel, rdMet });
-  });
-  return items;
-}
-
-function checkAssemblerPlans() {
-  const filter = activeAssemblerFilter();
-  if (filter !== "All Plans" && filter !== "R&D Unlocked") return;
-  const scraped = scrapeAssemblerRows();
-  if (scraped.length === 0) return;
-  const snapshot = `${filter}|${JSON.stringify(scraped)}`;
-  if (snapshot === lastAssemblerSnapshot) return;
-  // Only marked "sent" once background.js actually confirms it - see
-  // checkCorpStore()'s comment for why. This matters MORE here than for
-  // storage/Corp Store: this screen is a static reference database (per
-  // this file's header comment above), not live-changing game state, so a
-  // dropped send here would never get superseded by a later, different
-  // snapshot - the poll loop would just keep matching "already sent"
-  // forever with nothing ever actually saved.
-  let items;
-  if (filter === "All Plans") {
-    // Every row on this screen is something built at the Assembly (it has a
-    // rate/hr regardless of which gate, if any, it's behind) - this whole
-    // screen feeds the Assembly tab only, not Blueprints. Blueprints come
-    // from a separate set of category screens (Weapons, Defence, Reactors,
-    // etc.); importing from there was explored and deliberately shelved (see
-    // js/tab-blueprints.js's header comment) - Blueprints stay hand-entered
-    // only.
-    items = scraped;
-  } else {
-    // "R&D Unlocked" is a subset of the same data, already filtered by the
-    // game itself - re-applying the per-row checkmark is just a second
-    // guard, redundant with "All Plans" above but harmless.
-    items = scraped.filter((item) => item.rdMet);
-    if (items.length === 0) return;
+function leafTexts(root) {
+  const texts = [];
+  for (const el of root.querySelectorAll("*")) {
+    if (el.children.length === 0 && el.textContent.trim()) texts.push(el.textContent.trim());
   }
+  return texts;
+}
+
+// "258,000 credits" -> 258000, anything else -> null
+function parseCredits(text) {
+  const match = (text || "").trim().match(/^([\d,]+)\s*(?:credits|CR)$/i);
+  return match ? parseInt(match[1].replace(/,/g, ""), 10) : null;
+}
+
+function scrapeBlueprintStore() {
+  const panel = blueprintStorePanel();
+  if (!panel) return null;
+  const list = [];
+  let detail = null;
+  for (const h3 of panel.querySelectorAll("h3")) {
+    const name = h3.textContent.replace(/\s+/g, " ").trim();
+    if (!name || isBlueprintStoreTitle(name)) continue;
+    const block = outermostSingleH3(h3, panel);
+    const reqHeading = [...block.querySelectorAll("h4")].find((h4) => /^Resource Requirements$/i.test(h4.textContent.trim()));
+    if (reqHeading) {
+      // Each requirement row's leaves read: name, type, quantity, price.
+      const requirements = {};
+      for (const row of reqHeading.nextElementSibling ? reqHeading.nextElementSibling.children : []) {
+        const [itemName, , qtyText] = leafTexts(row);
+        const qty = parseFloat((qtyText || "").replace(/,/g, ""));
+        if (itemName && !Number.isNaN(qty)) requirements[itemName] = qty;
+      }
+      // Leaves read "Build Cost (today's prices):", "225,700 credits", ...
+      const detailTexts = leafTexts(block);
+      const creditsAfter = (label) => {
+        const i = detailTexts.findIndex((t) => label.test(t));
+        return i >= 0 ? parseCredits(detailTexts[i + 1]) : null;
+      };
+      // "Build Limit:" then "2" or "3 uses", "Ship Value" then "205,000"
+      const intAfter = (label) => {
+        const i = detailTexts.findIndex((t) => label.test(t));
+        const n = i >= 0 ? parseInt((detailTexts[i + 1] || "").replace(/,/g, ""), 10) : NaN;
+        return Number.isNaN(n) ? null : n;
+      };
+      detail = {
+        name,
+        requirements,
+        buildCost: creditsAfter(/^Build Cost/i),
+        guideValue: creditsAfter(/^Guide value/i),
+        mfgSkill: intAfter(/^Manufacturing Skill:?$/i),
+        buildLimit: intAfter(/^Build Limit:?$/i),
+        levelReq: intAfter(/^Level Req:?$/i),
+        // "Engineering Req:" then "Lvl 1 (You: 28)"
+        engReq: (() => {
+          const i = detailTexts.findIndex((t) => /^Engineering Req:?$/i.test(t));
+          const m = i >= 0 ? (detailTexts[i + 1] || "").match(/Lvl\s*(\d+)/i) : null;
+          return m ? parseInt(m[1], 10) : null;
+        })(),
+        shipValue: intAfter(/^Ship Value:?$/i),
+      };
+      continue;
+    }
+    const texts = leafTexts(block);
+    // A discounted card shows the base price struck through, then the price
+    // actually charged; an undiscounted one would show just the one.
+    const prices = texts.map(parseCredits).filter((n) => n !== null);
+    if (prices.length === 0) continue;
+    const limit = texts.map((t) => t.match(/^(?:Build Limit|Builds):\s*(\d+)$/i)).find(Boolean);
+    // Sits beside a wrench icon, so it isn't a leaf - read the span itself.
+    const eng = [...block.querySelectorAll("span")].map((el) => el.textContent.trim().match(/^Eng Lvl\s*(\d+)$/i)).find(Boolean);
+    const owned = texts.map((t) => t.match(/^OWNED \((\d+)/i)).find(Boolean);
+    // The small uppercase badge, beside the name or in the card's footer.
+    const badge = block.querySelector("span.uppercase");
+    const shipClass = badge ? badge.textContent.trim() : null;
+    const discount = texts.map((t) => t.match(/^-(\d+)%$/)).find(Boolean);
+    list.push({
+      name,
+      owned: !!owned,
+      copies: owned ? parseInt(owned[1], 10) : 0,
+      shipClass,
+      buildLimit: limit ? parseInt(limit[1], 10) : null,
+      engReq: eng ? parseInt(eng[1], 10) : null,
+      price: prices.length ? prices[prices.length - 1] : null,
+      basePrice: prices.length ? prices[0] : null,
+      discountPct: discount ? parseInt(discount[1], 10) : 0,
+    });
+  }
+  return list.length || detail ? { list, detail } : null;
+}
+
+function checkBlueprintStore() {
+  const scraped = scrapeBlueprintStore();
+  if (!scraped) return;
+  const snapshot = JSON.stringify(scraped);
+  if (snapshot === lastBlueprintStoreSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
   browser.runtime
-    .sendMessage({ type: "fsc-assembler-scrape", items })
-    .then(() => { lastAssemblerSnapshot = snapshot; })
+    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail })
+    .then(() => { lastBlueprintStoreSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// Character Skills window (the graduation-cap "Skills" button): a card per
+// skill, each an <h4> name with a "Level N" line beside it. Only the
+// Manufacturing and Engineering levels are read, so the Blueprints tab can
+// flag blueprints the player can't run (or modules they can't fit) without
+// the player typing them in. The Captain
+// level comes from the top HUD bar instead ("Captain" over "Level 41"),
+// which is always on screen; starship blueprints' "Level Req" is checked
+// against it.
+const SKILLS_PANEL_TITLE = "Character Skills";
+let lastSkillsSnapshot = null;
+
+function scrapeSkillLevel(skillName) {
+  const title = [...document.querySelectorAll("h2")].find((h2) => h2.textContent.trim() === SKILLS_PANEL_TITLE);
+  if (!title) return null;
+  for (const h4 of document.querySelectorAll("h4")) {
+    if (h4.textContent.trim() !== skillName) continue;
+    const level = (h4.parentElement.textContent || "").match(/Level\s*(\d+)/i);
+    if (level) return parseInt(level[1], 10);
+  }
+  return null;
+}
+
+function scrapeCaptainLevel() {
+  for (const span of document.querySelectorAll("span")) {
+    if (span.textContent.trim() !== "Captain" || !span.nextElementSibling) continue;
+    const level = span.nextElementSibling.textContent.trim().match(/^Level\s*(\d+)$/i);
+    if (level) return parseInt(level[1], 10);
+  }
+  return null;
+}
+
+function checkSkills() {
+  const manufacturing = scrapeSkillLevel("Manufacturing");
+  const engineering = scrapeSkillLevel("Engineering");
+  const captain = scrapeCaptainLevel();
+  if (manufacturing === null && engineering === null && captain === null) return;
+  const snapshot = `${manufacturing}/${engineering}/${captain}`;
+  if (snapshot === lastSkillsSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-skills-scrape", manufacturing, engineering, captain })
+    .then(() => { lastSkillsSnapshot = snapshot; })
     .catch(() => {});
 }
 
@@ -396,6 +628,9 @@ const pollIntervalIds = [
   setInterval(checkStorage, STORAGE_POLL_MS),
   setInterval(checkCorpStore, CORP_POLL_MS),
   setInterval(checkAssemblerPlans, ASSEMBLER_POLL_MS),
+  setInterval(checkResearchPlans, ASSEMBLER_POLL_MS),
+  setInterval(checkBlueprintStore, ASSEMBLER_POLL_MS),
+  setInterval(checkSkills, ASSEMBLER_POLL_MS),
   setInterval(checkLexiconPlanets, LEXICON_POLL_MS),
 ];
 

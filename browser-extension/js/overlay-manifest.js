@@ -51,6 +51,7 @@ let edgeHandleEl = null;
 let selectionRowEl = null;
 let selectionSelectEl = null;
 let selectionInfoEl = null;
+let markCompleteBtn = null;
 let corpSelectionRowEl = null;
 let corpSelectionSelectEl = null;
 let corpSelectionInfoEl = null;
@@ -92,6 +93,7 @@ let corpData = { available: false, items: [] };
 let overlayVisible = false;
 let builds = {}; // buildName -> [[kind, itemName, qty], ...], mirrors storage.js's `builds` key
 let blueprints = {}; // blueprintName -> Blueprint, mirrors storage.js's `blueprints` key
+let buildLabels = {}; // buildId -> custom display name, mirrors storage.js's `buildLabels` key
 let manifestSelection = null; // { type: "build"|"blueprint", name: string } | null - see storage.js
 let manifestCorpSelection = null; // Corp-view counterpart - { type: "build"|"blueprint", name: string } | null, see storage.js's manifestCorpSelection
 // render() fully rebuilds the row list on every storage change - live
@@ -290,6 +292,27 @@ const STYLE = `
     color: #67e8f9;
     border-color: #22d3ee;
     outline: none;
+  }
+  .fsc-mark-complete-btn {
+    flex: 0 0 auto;
+    background: #172033;
+    color: #94a3b8;
+    border: 1px solid #334155;
+    border-radius: 5px;
+    padding: 3px 7px;
+    font-size: 11px;
+    line-height: 1.2;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .fsc-mark-complete-btn:hover, .fsc-mark-complete-btn:focus-visible {
+    color: #67e8f9;
+    border-color: #22d3ee;
+    outline: none;
+  }
+  .fsc-mark-complete-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
   .fsc-row-clickable {
     cursor: pointer;
@@ -532,6 +555,16 @@ export function initManifestOverlay() {
         refreshCorpSelectionSelector();
       });
     }
+    // A build may have just been renamed on the dashboard's Plan a Build tab
+    // (see tab-plan.js's "Rename Build..." button) - keep both dropdowns'
+    // display text in sync rather than showing a stale label.
+    if (changes.buildLabels) {
+      storage.loadBuildLabels().then((labels) => {
+        buildLabels = labels;
+        refreshSelectionSelector();
+        refreshCorpSelectionSelector();
+      });
+    }
     if (changes.manifestSelection) {
       manifestSelection = changes.manifestSelection.newValue || null;
       refreshSelectionSelector();
@@ -547,13 +580,15 @@ export function initManifestOverlay() {
     browser.storage.local.get(["manifestToMineData", "manifestCorpToMineData", "manifestSelection", "manifestCorpSelection"]),
     storage.loadBuilds(),
     storage.loadBlueprints(),
-  ]).then(([result, loadedBuilds, loadedBlueprints]) => {
+    storage.loadBuildLabels(),
+  ]).then(([result, loadedBuilds, loadedBlueprints, loadedBuildLabels]) => {
     personalData = result.manifestToMineData || { available: false };
     corpData = result.manifestCorpToMineData || { available: false, items: [], refined: [] };
     manifestSelection = result.manifestSelection || null;
     manifestCorpSelection = result.manifestCorpSelection || null;
     builds = loadedBuilds;
     blueprints = loadedBlueprints;
+    buildLabels = loadedBuildLabels;
     refreshSelectionSelector();
     refreshCorpSelectionSelector();
     render();
@@ -669,7 +704,34 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-refresh-manifest-selection" }).catch(() => {});
   });
 
-  selectionRowEl.append(selectionLabel, selectionSelectEl, refreshBtn, selectionInfoEl);
+  // "Mark Complete" - declares the currently-selected Blueprint/Build Order
+  // done: clears ITS OWN batch counts and ore-source picks (see storage.js's
+  // manifestPendingBatches/manifestOreChoices) and deselects, so a finished
+  // print doesn't leave stale numbers/settings behind for the next one that
+  // happens to share an ore. Deliberately never deletes the underlying
+  // Blueprint or Build Order - only the dashboard's own "Mark Build
+  // Complete" (tab-plan.js) does that, and on purpose stays a separate,
+  // more deliberate action. Only meaningful for Personal Farm (batches/ore
+  // choices are a Personal-view-only concept - see refreshSelectionSelector()
+  // enabling this button, and storage.js's manifestOreChoices comment on why
+  // Corp has no equivalent).
+  markCompleteBtn = document.createElement("button");
+  markCompleteBtn.type = "button";
+  markCompleteBtn.className = "fsc-mark-complete-btn";
+  markCompleteBtn.textContent = "Complete";
+  markCompleteBtn.title = "Mark this Blueprint/Build Order complete - clears its batch counts and ore-source picks, then deselects";
+  markCompleteBtn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!manifestSelection) return;
+    const label =
+      manifestSelection.type === "blueprint"
+        ? manifestSelection.name
+        : buildLabels[manifestSelection.name] || `Build ${manifestSelection.name}`;
+    if (!confirm(`Mark "${label}" complete? This clears its batch counts and ore-source picks (not the Blueprint/Build Order itself), then deselects it.`)) return;
+    browser.runtime.sendMessage({ type: "fsc-mark-manifest-selection-complete" }).catch(() => {});
+  });
+
+  selectionRowEl.append(selectionLabel, selectionSelectEl, refreshBtn, markCompleteBtn, selectionInfoEl);
 
   // Corp's own Blueprint/Build Order switcher - exact mirror of the
   // Personal one above (same manifestCorpSelection/manifestCorpToMineData
@@ -828,13 +890,14 @@ function refreshSelectionSelector() {
     for (const name of buildNames) {
       const opt = document.createElement("option");
       opt.value = `build:${name}`;
-      opt.textContent = `Build ${name}`;
+      opt.textContent = buildLabels[name] || `Build ${name}`;
       group.appendChild(opt);
     }
     selectionSelectEl.appendChild(group);
   }
 
   selectionSelectEl.value = manifestSelection ? `${manifestSelection.type}:${manifestSelection.name}` : "";
+  if (markCompleteBtn) markCompleteBtn.disabled = !manifestSelection;
 
   if (manifestSelection?.type === "blueprint") {
     const blueprint = blueprints[manifestSelection.name];
@@ -889,7 +952,7 @@ function refreshCorpSelectionSelector() {
     for (const name of buildNames) {
       const opt = document.createElement("option");
       opt.value = `build:${name}`;
-      opt.textContent = `Build ${name}`;
+      opt.textContent = buildLabels[name] || `Build ${name}`;
       group.appendChild(opt);
     }
     corpSelectionSelectEl.appendChild(group);
@@ -1064,8 +1127,13 @@ function emptyMessage() {
   return "Nothing left to mine";
 }
 
+// Scoped to whichever Blueprint/Build Order is currently selected (see
+// storage.js's manifestPendingBatches comment) - deliberately a different
+// message/storage key than the dashboard's global pendingRefining-backed
+// batch controls, so a batch started here for one selection never silently
+// credits a different selection's own "how many more do I need" math.
 function setPendingBatches(oreName, batches) {
-  browser.runtime.sendMessage({ type: "fsc-set-pending-batches", oreName, batches }).catch(() => {});
+  browser.runtime.sendMessage({ type: "fsc-set-manifest-pending-batches", oreName, batches }).catch(() => {});
 }
 
 // Row-level "focus" click - see focusedItem's own declaration comment.

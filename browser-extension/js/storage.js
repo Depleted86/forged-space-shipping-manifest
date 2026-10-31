@@ -41,6 +41,15 @@ export const DEFAULT_SETTINGS = {
   // before, since only raw ore actually goes into the Ore Hold.
   has_ore_hold: false,
   ore_hold_capacity: 600,
+  // The player's Manufacturing Skill, entered on the Blueprints tab - flags
+  // blueprints that need more than this (store.mfgSkill). null = not set.
+  manufacturing_skill: null,
+  // The player's Captain level, read from the game's HUD - flags blueprints
+  // whose captainLevel is above it. null = not seen yet.
+  captain_level: null,
+  // The player's Engineering skill, read from the Character Skills window -
+  // compared with a module blueprint's store.engReq (needed to fit it).
+  engineering_skill: null,
 };
 
 const KEYS = {
@@ -66,6 +75,8 @@ const KEYS = {
   manifestOreChoices: "manifestOreChoices",
   manifestCorpSelection: "manifestCorpSelection",
   manifestCorpToMineData: "manifestCorpToMineData",
+  manifestPendingBatches: "manifestPendingBatches",
+  buildLabels: "buildLabels",
 };
 
 // Pre-2026-08-15 key names, from before Recipe/AssemblyRecipe were renamed
@@ -108,6 +119,7 @@ export async function loadBlueprints() {
     const reqs = entry && entry.requirements ? entry.requirements : entry;
     for (const [itemName, qty] of Object.entries(reqs || {})) blueprint.setRequirement(itemName, qty);
     blueprint.captainLevel = entry && entry.captain_level != null ? entry.captain_level : null;
+    blueprint.store = (entry && entry.requirements && entry.store) || null;
     blueprints[name] = blueprint;
   }
   return blueprints;
@@ -116,7 +128,7 @@ export async function loadBlueprints() {
 export async function saveBlueprints(blueprints) {
   const raw = {};
   for (const [name, blueprint] of Object.entries(blueprints)) {
-    raw[name] = { requirements: { ...blueprint.requirements }, captain_level: blueprint.captainLevel ?? null };
+    raw[name] = { requirements: { ...blueprint.requirements }, captain_level: blueprint.captainLevel ?? null, store: blueprint.store ?? null };
   }
   await setKey(KEYS.blueprints, raw);
 }
@@ -182,6 +194,7 @@ export async function loadAssemblyPlans() {
     const plan = new AssemblyPlan(outputItem, entry.rate_per_hour ?? 1);
     for (const [itemName, qty] of Object.entries(entry.requirements || {})) plan.setRequirement(itemName, qty);
     plan.captainLevel = entry.captain_level != null ? entry.captain_level : null;
+    plan.research = entry.research ?? null;
     assemblyPlans[outputItem] = plan;
   }
   return assemblyPlans;
@@ -190,7 +203,7 @@ export async function loadAssemblyPlans() {
 export async function saveAssemblyPlans(assemblyPlans) {
   const raw = {};
   for (const [outputItem, plan] of Object.entries(assemblyPlans)) {
-    raw[outputItem] = { rate_per_hour: plan.ratePerHour, requirements: { ...plan.requirements }, captain_level: plan.captainLevel ?? null };
+    raw[outputItem] = { rate_per_hour: plan.ratePerHour, requirements: { ...plan.requirements }, captain_level: plan.captainLevel ?? null, research: plan.research ?? null };
   }
   await setKey(KEYS.assemblyPlans, raw);
 }
@@ -434,4 +447,44 @@ export async function loadManifestCorpToMineData() {
 
 export async function saveManifestCorpToMineData(data) {
   await setKey(KEYS.manifestCorpToMineData, data);
+}
+
+// { "<type>:<name>": { oreName: batchCount } } - per-selection pending-
+// refining batch counts for the Manifest overlay's Batch controls, keyed by
+// manifestSelectionKey() exactly like manifestOreChoices above. Deliberately
+// separate from the global `pendingRefining` key the dashboard's Inventory/
+// Plan a Build tabs use - a real batch already started for Blueprint A
+// shouldn't silently credit Blueprint B's own "how many more batches do I
+// need" math just because they happen to share an ore, which is what a
+// single global counter caused (2026-08-29 - user confirmed this was
+// actively misleading them). The raw-ore quantity ITSELF is still deducted
+// from the one real shared inventory when a batch count is entered here
+// (see background.js's handleSetManifestPendingBatches()) - only the
+// "credit toward remaining need" is scoped per-selection, since the ore is
+// genuinely spent regardless of which selection's ledger is tracking it.
+export async function loadManifestPendingBatches() {
+  return getKey(KEYS.manifestPendingBatches, {});
+}
+
+export async function saveManifestPendingBatches(batches) {
+  await setKey(KEYS.manifestPendingBatches, batches);
+}
+
+// { buildId: customLabel } - an optional player-chosen display name for a
+// saved Build Order, set via tab-plan.js's "Rename Build..." button. The
+// underlying build is still stored/keyed/sorted by its auto-assigned integer
+// string id (see tab-plan.js's nextBuildNumber()) everywhere else
+// (app.builds, activeBuildName, manifestSelection, etc.) - this is purely a
+// cosmetic overlay so a build id absent from this map just displays as
+// "Build <id>" exactly as before. Kept as its own tiny side-table rather
+// than changing what a build's storage key IS, so nothing that already
+// depends on build ids being small reused integers (nextBuildNumber's
+// lowest-unused-gap reuse, numeric sort order in tab-plan.js/tab-corp.js/
+// overlay-manifest.js) has to change.
+export async function loadBuildLabels() {
+  return getKey(KEYS.buildLabels, {});
+}
+
+export async function saveBuildLabels(labels) {
+  await setKey(KEYS.buildLabels, labels);
 }

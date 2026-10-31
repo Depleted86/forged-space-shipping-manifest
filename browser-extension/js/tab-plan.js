@@ -43,10 +43,18 @@ export function initPlanTab(app, container) {
   const buildSelect = el("select", { id: "plan-build-select" });
   const buildStatus = el("div", { class: "status-text" });
 
+  // "Build N" unless the player gave it a custom name via "Rename Build..."
+  // (app.buildLabels, storage.js's buildLabels key) - purely a display
+  // string, the underlying build is still stored/keyed by its auto-assigned
+  // integer id `name` regardless (see nextBuildNumber() below).
+  function buildLabel(name) {
+    return app.buildLabels[name] || `Build ${name}`;
+  }
+
   function refreshBuildCombo() {
     clear(buildSelect);
     for (const name of Object.keys(app.builds).sort((a, b) => Number(a) - Number(b))) {
-      buildSelect.appendChild(el("option", { value: name, text: `Build ${name}`, selected: name === app.activeBuildName ? "" : undefined }));
+      buildSelect.appendChild(el("option", { value: name, text: buildLabel(name), selected: name === app.activeBuildName ? "" : undefined }));
     }
     buildSelect.value = app.activeBuildName || "";
   }
@@ -56,6 +64,27 @@ export function initPlanTab(app, container) {
     let n = 1;
     while (used.has(n)) n++;
     return String(n);
+  }
+
+  // Lets the player give the active build a custom, memorable name (e.g.
+  // "Outpost Run") instead of the auto-assigned "Build N" - so a repeatable
+  // custom order can actually be identified/found again later, on both this
+  // dropdown and the in-page Manifest overlay's own selector (js/overlay-
+  // manifest.js) and the Corp tab's build dropdown (tab-corp.js), which all
+  // read the same app.buildLabels/storage.js buildLabels key. Purely
+  // cosmetic - the build's real storage key (`name`, the auto-numbered id)
+  // never changes, so activeBuildName/manifestSelection/nextBuildNumber's
+  // gap-reuse are all unaffected.
+  async function renameBuild() {
+    if (!app.activeBuildName) return;
+    const current = app.buildLabels[app.activeBuildName] || "";
+    const input = prompt(`Rename "${buildLabel(app.activeBuildName)}" to:`, current);
+    if (input === null) return; // cancelled
+    const trimmed = input.trim();
+    if (trimmed) app.buildLabels[app.activeBuildName] = trimmed;
+    else delete app.buildLabels[app.activeBuildName]; // blank clears back to "Build N"
+    await storage.saveBuildLabels(app.buildLabels);
+    refreshBuildCombo();
   }
 
   async function saveActiveBuild() {
@@ -106,12 +135,61 @@ export function initPlanTab(app, container) {
     if (changed) await storage.saveSettings(app.settings);
   }
 
+  // Same lifecycle-moment reasoning as pruneStaleItemSettings() above, but
+  // for the in-page Manifest overlay's OWN per-build tracking data (see
+  // storage.js's manifestOreChoices/manifestPendingBatches/manifestSelection
+  // comments) plus this build's custom display name. Matters specifically
+  // because nextBuildNumber() REUSES a deleted/completed build's id for the
+  // next new build - without this, a fresh Build "2" could inherit stale
+  // ore-choice/batch-count data (or even a stale name) left over from a
+  // completely different, unrelated old Build "2". Call AFTER `name` has
+  // been removed from app.builds. Only handles Build Order keys
+  // (`build:${name}`) - a Blueprint's manifestOreChoices/manifestPending
+  // Batches entry has the same theoretical key-reuse risk if a Blueprint is
+  // deleted and later re-added under the exact same name, but Blueprint
+  // names aren't auto-recycled the way build ids are, so that's left alone.
+  async function cleanupBuildTrackingData(name) {
+    if (name in app.buildLabels) {
+      delete app.buildLabels[name];
+      await storage.saveBuildLabels(app.buildLabels);
+    }
+    const key = `build:${name}`;
+    const manifestOreChoices = await storage.loadManifestOreChoices();
+    if (key in manifestOreChoices) {
+      delete manifestOreChoices[key];
+      await storage.saveManifestOreChoices(manifestOreChoices);
+    }
+    const manifestPendingBatches = await storage.loadManifestPendingBatches();
+    if (key in manifestPendingBatches) {
+      delete manifestPendingBatches[key];
+      await storage.saveManifestPendingBatches(manifestPendingBatches);
+    }
+    // If the Manifest overlay (or its Corp view) still points at exactly
+    // this build, clear that selection too - directly, rather than going
+    // through background.js's message handlers, since this dashboard
+    // context already has the authoritative state and doesn't need the
+    // round trip. Also invalidates the cached plan for that view so it
+    // doesn't keep showing a plan for a selection that no longer exists.
+    const manifestSelection = await storage.loadManifestSelection();
+    if (manifestSelection && manifestSelection.type === "build" && manifestSelection.name === name) {
+      await storage.saveManifestSelection(null);
+      await storage.saveManifestToMineData({ available: false });
+    }
+    const manifestCorpSelection = await storage.loadManifestCorpSelection();
+    if (manifestCorpSelection && manifestCorpSelection.type === "build" && manifestCorpSelection.name === name) {
+      await storage.saveManifestCorpSelection(null);
+      await storage.saveManifestCorpToMineData({ available: false, items: [], refined: [] });
+    }
+  }
+
   async function deleteBuild() {
     if (!app.activeBuildName) return;
-    if (!confirm(`Delete build "${app.activeBuildName}"? This does not touch pending refining or inventory.`)) return;
-    delete app.builds[app.activeBuildName];
+    const name = app.activeBuildName;
+    if (!confirm(`Delete build "${buildLabel(name)}"? This does not touch pending refining or inventory.`)) return;
+    delete app.builds[name];
     await storage.saveBuilds(app.builds);
     await pruneStaleItemSettings();
+    await cleanupBuildTrackingData(name);
     // Falls back to Build 1 (recreated fresh if it was the one just
     // deleted) rather than landing in the old "(unsaved plan)" state -
     // there's always a build selected now, never a generic placeholder.
@@ -120,6 +198,7 @@ export function initPlanTab(app, container) {
 
   async function markBuildComplete() {
     if (!app.activeBuildName) return;
+    const name = app.activeBuildName;
     const result = app.lastPlanResult;
     let involved = new Set();
     if (result) {
@@ -134,15 +213,16 @@ export function initPlanTab(app, container) {
     }
     const names = [...involved].map((o) => o.name);
     const msg = names.length
-      ? `Mark build "${app.activeBuildName}" complete? This clears pending refining batches for: ${names.join(", ")}.`
-      : `Mark build "${app.activeBuildName}" complete? No recent calculation exists, so nothing will be auto-cleared from pending refining.`;
+      ? `Mark build "${buildLabel(name)}" complete? This clears pending refining batches for: ${names.join(", ")}.`
+      : `Mark build "${buildLabel(name)}" complete? No recent calculation exists, so nothing will be auto-cleared from pending refining.`;
     if (!confirm(msg)) return;
 
     for (const ore of involved) delete app.pendingRefining[ore.name];
     await storage.savePendingRefining(app.pendingRefining);
+    await cleanupBuildTrackingData(name);
     if (app.refreshHooks.inventory) app.refreshHooks.inventory();
 
-    delete app.builds[app.activeBuildName];
+    delete app.builds[name];
     await storage.saveBuilds(app.builds);
     await pruneStaleItemSettings();
     // Same fallback as deleteBuild() - see the comment there.
@@ -155,7 +235,7 @@ export function initPlanTab(app, container) {
     await storage.saveActiveBuildName(name);
     planEntries = app.builds[name].map((e) => [...e]);
     buildSelect.value = name;
-    buildStatus.textContent = `Editing build "${name}" - changes save automatically.`;
+    buildStatus.textContent = `Editing build "${buildLabel(name)}" - changes save automatically.`;
     renderEntriesList();
     clear(resultMatTbody);
     clear(resultOreTbody);
@@ -264,7 +344,16 @@ export function initPlanTab(app, container) {
       // "blueprint" (see calc-engine.js's entriesToTotals()) - a build saved
       // before that rename can still have old-tagged entries, so both
       // display the same way here.
-      const label = kind === "blueprint" || kind === "recipe" ? `Blueprint: ${name} x${qty}` : `Material: ${name} x${qty}`;
+      let label = kind === "blueprint" || kind === "recipe" ? `Blueprint: ${name} x${qty}` : `Material: ${name} x${qty}`;
+      // A store-imported blueprint with no materials yet adds nothing to
+      // the plan - say so rather than silently under-counting.
+      const blueprint = kind === "blueprint" || kind === "recipe" ? app.blueprints[name] : null;
+      const needSkill = blueprint?.store?.mfgSkill;
+      const haveSkill = app.settings.manufacturing_skill;
+      if (blueprint && !blueprint.hasRecipe()) label += " (no materials yet - open it in the Blueprint Store)";
+      else if (needSkill != null && haveSkill != null && needSkill > haveSkill) label += ` (needs Manufacturing Skill ${needSkill})`;
+      else if (blueprint?.captainLevel != null && app.settings.captain_level != null && blueprint.captainLevel > app.settings.captain_level) label += ` (needs Captain Level ${blueprint.captainLevel})`;
+      else if (blueprint?.store && !blueprint.store.owned) label += " (not owned)";
       entriesSelect.appendChild(el("option", { value: String(i), text: label }));
     });
   }
@@ -278,7 +367,7 @@ export function initPlanTab(app, container) {
   }
 
   async function clearPlan() {
-    if (planEntries.length > 0 && !confirm(`Clear all ${planEntries.length} item(s) from build "${app.activeBuildName}"? This cannot be undone.`)) return;
+    if (planEntries.length > 0 && !confirm(`Clear all ${planEntries.length} item(s) from build "${buildLabel(app.activeBuildName)}"? This cannot be undone.`)) return;
     planEntries = [];
     renderEntriesList();
     await saveActiveBuild();
@@ -390,9 +479,16 @@ export function initPlanTab(app, container) {
         } else {
           const hours = assemblyHours[name];
           const hoursText = hours != null ? formatHours(hours) : "rate unknown";
+          // Still planned (so players can plan ahead), but flagged - the
+          // Assembler won't take this plan until it's researched.
+          const locked = app.assemblyPlans[name]?.isResearchLocked();
           sourcesContainer.appendChild(
             el("div", { class: "field-row" }, [
-              el("label", { for: modeSelectId, class: "status-ok", text: `${name} (assembly, need ${need.toFixed(1)}, ${hoursText}):` }),
+              el("label", {
+                for: modeSelectId,
+                class: locked ? "status-warn" : "status-ok",
+                text: `${name} (assembly, need ${need.toFixed(1)}, ${hoursText}${locked ? ", NOT RESEARCHED YET" : ""}):`,
+              }),
               modeSelect,
             ])
           );
@@ -778,6 +874,7 @@ export function initPlanTab(app, container) {
         buildSelectLabel,
         buildSelect,
         el("button", { text: "New Build...", onclick: newBuild }),
+        el("button", { text: "Rename Build...", onclick: renameBuild }),
         el("button", { class: "danger", text: "Delete Build", onclick: deleteBuild }),
         el("button", { text: "Mark Build Complete", onclick: markBuildComplete }),
       ]),
@@ -840,6 +937,9 @@ export function initPlanTab(app, container) {
   })();
 
   app.refreshHooks.planBlueprintCombo = refreshPlanBlueprintCombo;
+  // A build may have been renamed from a second dashboard window - see
+  // dashboard.js's storage.onChanged "changes.buildLabels" branch.
+  app.refreshHooks.planBuildLabels = refreshBuildCombo;
   // No-arg - re-derives the field's label AND value from app.settings itself
   // (has_ore_hold may have just flipped in Settings, not just the number),
   // rather than being handed a single number that no longer says which
