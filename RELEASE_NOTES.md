@@ -2,7 +2,7 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
-## 4.1 (prepared 2026-11-05)
+## 4.1 (submitted to AMO and Edge Add-ons 2026-11-05)
 
 ### Release notes (public)
 
@@ -12,7 +12,7 @@ Copy/paste source for each version's AMO submission fields - "Release Notes" (pu
 - **Values the game supplies are no longer typed in by hand.** Cargo, Ore Hold and skills show as read from the game. The Blueprints and Assembly tabs are now viewers for what the game recorded (with Delete), and the overlay's blueprint editor is replaced by "Add to Build". A blueprint without materials yet tells you which store to view it in.
 - **Harvester slots** are now set on the Planets tab (1-10, the game's maximum), next to the roster they size.
 - Fixed: transferring ore on the Ore Hold tab of Commercial Storage now updates trip counts. Changing the ship class filter resets the blueprint picker.
-- Also available for Chrome and Edge.
+- Chrome and Edge versions are on the way.
 
 ### Notes for reviewers (private)
 

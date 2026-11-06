@@ -34,8 +34,8 @@ This extension is strictly read-only and makes no network requests of any
 kind. It only reads the game screens you open on forgedspace.com - it
 never clicks, submits, or automates anything in the game on your behalf.
 Its on-page UI (the Manifest overlay and short blueprint notices) is
-separate, self-contained elements it draws and controls itself; it never
-modifies the game's own page content. Everything it stores (blueprints,
+drawn and controlled by the extension itself, separate from the game's
+own page, and it never modifies the game's page content. Everything it stores (blueprints,
 inventory, builds, settings) stays local to your own browser and is never
 transmitted anywhere.
 
@@ -53,22 +53,31 @@ Productivity (or Tools, if Productivity isn't offered as a distinct option)
 
 ## Single purpose description
 
-Helps Forged Space players plan mining, refining, and assembly by tracking
-blueprints and syncing a live manifest from their in-game storage.
+Helps Forged Space players plan mining, refining, harvesting and assembly
+for their builds. It reads the game screens the player opens on
+forgedspace.com (storage, blueprint stores, assembly and research plans,
+skills) to keep a local plan up to date, and shows what's left to gather in
+an in-game Manifest overlay.
 
 ## Permission justifications
 
 **storage**
-Used to save the player's own blueprints, inventory snapshots, saved
-builds, corp order data, and settings locally in the browser, so their
-planning data persists between sessions.
+Saves the player's own planning data locally in the browser so it persists
+between sessions: blueprints and assembly plans read from the game,
+inventory snapshots, saved builds and corp orders, harvester assignments
+and settings. Nothing is ever sent off the device.
 
 **Host permission: https://forgedspace.com/***
-Used only so the extension's content script can read the game screens the
-player opens on forgedspace.com (storage, stores, assembly and research
-plans, skills) to keep the extension's local tracking in sync, and to
-render its own separate in-page Manifest overlay. It never submits
-or modifies anything on the page itself.
+The only host is https://forgedspace.com/*, the game itself. The content
+script reads the game screens the player opens there (Commercial Storage,
+Corp Store, blueprint stores, Assembly Facility, R&D Office, Character
+Skills, the Systems Lexicon and the HUD) using textContent only, to keep
+the local plan in sync, and draws the extension's own Manifest overlay. It
+never clicks, submits or changes anything on the page, and makes no
+network requests.
+
+**Remote code**
+No, I am not using remote code. Every script ships in the package.
 
 ## Privacy policy URL
 
