@@ -41,7 +41,7 @@ export const DEFAULT_SETTINGS = {
   // before, since only raw ore actually goes into the Ore Hold.
   has_ore_hold: false,
   ore_hold_capacity: 600,
-  // The player's Manufacturing Skill, entered on the Blueprints tab - flags
+  // The player's Manufacturing Skill, read from the Character Skills window - flags
   // blueprints that need more than this (store.mfgSkill). null = not set.
   manufacturing_skill: null,
   // The player's Captain level, read from the game's HUD - flags blueprints
@@ -69,7 +69,6 @@ const KEYS = {
   corpToMineData: "corpToMineData",
   activeCorpBuildName: "activeCorpBuildName",
   corpHaveOverrides: "corpHaveOverrides",
-  dashboardOnboarded: "dashboardOnboarded",
   manifestSelection: "manifestSelection",
   manifestToMineData: "manifestToMineData",
   manifestOreChoices: "manifestOreChoices",
@@ -353,24 +352,6 @@ export async function saveCorpHaveOverrides(haveOverrides) {
 
 export async function saveActiveCorpBuildName(name) {
   await setKey(KEYS.activeCorpBuildName, name);
-}
-
-// Whether the dashboard has ever been opened before - `dashboard.js`'s
-// bootstrap() checks this on load to decide whether to land a first-time
-// user on the Settings tab (so they immediately provide cargo capacity/Ore
-// Hold/max harvesters, which every trip calculation across the app depends
-// on) instead of the usual default tab. Deliberately its OWN storage check,
-// not routed through browser.runtime.onInstalled (background.js's welcome.html
-// splash already uses that, and is documented elsewhere in this project as
-// NOT reliably firing under Firefox's temporary/debug extension loading) -
-// this instead reflects real usage (has the dashboard page itself ever
-// actually loaded), which works regardless of how the extension was loaded.
-export async function loadDashboardOnboarded() {
-  return getKey(KEYS.dashboardOnboarded, false);
-}
-
-export async function saveDashboardOnboarded() {
-  await setKey(KEYS.dashboardOnboarded, true);
 }
 
 // Which Blueprint or Build Order the in-page Manifest overlay's own

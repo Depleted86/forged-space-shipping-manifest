@@ -15,7 +15,7 @@
 // headless recalculation - see recalculateActiveBuildToMineData() there.
 
 import { el, clear, selectableRow, enableInlineAutocomplete, formatHours } from "./dom-helpers.js";
-import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames } from "./calc-engine.js";
+import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint } from "./calc-engine.js";
 import * as storage from "./storage.js";
 import { applyLocalPendingDeduction } from "./tab-inventory.js";
 
@@ -289,7 +289,12 @@ export function initPlanTab(app, container) {
   // Ship-class filter for the blueprint picker (see blueprintShipClasses()).
   const blueprintClassLabel = el("label", { for: "plan-blueprint-class", class: "visually-hidden", text: "Blueprint class" });
   const blueprintClassSelect = el("select", { id: "plan-blueprint-class" });
-  blueprintClassSelect.addEventListener("change", () => refreshPlanBlueprintCombo());
+  // A class change empties the pick rather than landing on the new class's
+  // first blueprint, so nothing gets added by mistake.
+  blueprintClassSelect.addEventListener("change", () => {
+    refreshPlanBlueprintCombo();
+    blueprintSelect.value = "";
+  });
   function refreshPlanBlueprintCombo() {
     const wanted = blueprintClassSelect.value;
     clear(blueprintClassSelect);
@@ -297,6 +302,7 @@ export function initPlanTab(app, container) {
     blueprintClassSelect.value = [...blueprintClassSelect.options].some((o) => o.value === wanted) ? wanted : "";
     const picked = blueprintSelect.value;
     clear(blueprintSelect);
+    blueprintSelect.appendChild(el("option", { value: "", text: "-- Select blueprint --" }));
     const names = Object.keys(app.blueprints).filter((name) => inShipClass(app.blueprints[name], blueprintClassSelect.value)).sort();
     for (const [group, groupNames] of groupBlueprintNames(names, app.blueprints)) {
       blueprintSelect.appendChild(el("optgroup", { label: group }, groupNames.map((name) => el("option", { value: name, text: name }))));
@@ -363,7 +369,7 @@ export function initPlanTab(app, container) {
       const blueprint = kind === "blueprint" || kind === "recipe" ? app.blueprints[name] : null;
       const needSkill = blueprint?.store?.mfgSkill;
       const haveSkill = app.settings.manufacturing_skill;
-      if (blueprint && !blueprint.hasRecipe()) label += " (no materials yet - open it in the Blueprint Store)";
+      if (blueprint && !blueprint.hasRecipe()) label += ` - no materials yet. ${blueprintImportHint(blueprint)}`;
       else if (needSkill != null && haveSkill != null && needSkill > haveSkill) label += ` (needs Manufacturing Skill ${needSkill})`;
       else if (blueprint?.captainLevel != null && app.settings.captain_level != null && blueprint.captainLevel > app.settings.captain_level) label += ` (needs Captain Level ${blueprint.captainLevel})`;
       else if (blueprint?.store && !blueprint.store.owned) label += " (not owned)";
@@ -544,18 +550,21 @@ export function initPlanTab(app, container) {
   // ============================ Calculate ============================
   // Ships with a dedicated Ore Hold (settings.has_ore_hold - see
   // storage.js's comment) use a different capacity for mining/refining
-  // trips than everything else. This field drives exactly that trip count,
-  // so it needs to track/persist whichever setting is actually in effect -
-  // not stay hardcoded to "Cargo capacity" while silently governed by a
-  // different number underneath, which would be confusing and easy to get
-  // out of sync with what Settings shows.
+  // trips than everything else. Both are read from the game's top bar, so
+  // this just shows whichever one is in effect.
   function capacityFieldInfo() {
     return app.settings.has_ore_hold
-      ? { key: "ore_hold_capacity", label: "Ore Hold capacity:" }
-      : { key: "cargo_capacity", label: "Cargo capacity:" };
+      ? { key: "ore_hold_capacity", label: "Ore Hold capacity" }
+      : { key: "cargo_capacity", label: "Cargo capacity" };
   }
-  const cargoLabel = el("label", { for: "plan-cargo-input", text: capacityFieldInfo().label });
-  const cargoInput = el("input", { id: "plan-cargo-input", type: "text", value: String(app.settings[capacityFieldInfo().key]) });
+  function tripCapacity() {
+    return Number(app.settings[capacityFieldInfo().key]);
+  }
+  const cargoInfo = el("span", { class: "status-text" });
+  function refreshCargoInfo() {
+    cargoInfo.textContent = `${capacityFieldInfo().label}: ${tripCapacity()} (from the game)`;
+  }
+  refreshCargoInfo();
 
   const resultMatTbody = el("tbody");
   const resultMatTable = el("table", { class: "data-table" }, [
@@ -689,11 +698,7 @@ export function initPlanTab(app, container) {
       alert("Click 'Build Requirements' first.");
       return;
     }
-    const cargoCapacity = parseFloat(cargoInput.value);
-    if (Number.isNaN(cargoCapacity) || cargoCapacity <= 0) {
-      alert(`${capacityFieldInfo().label.replace(":", "")} must be a positive number.`);
-      return;
-    }
+    const cargoCapacity = tripCapacity();
 
     const buyModes = app.settings.item_acquisition_mode || {};
     const { expanded, assemblyHours } = expandCommodities(app.catalog, app.planBaseRequirements, app.assemblyPlans, app.inventory, 20, buyModes);
@@ -708,7 +713,6 @@ export function initPlanTab(app, container) {
         app.settings.ore_choices[item] = ore.name;
       }
     }
-    app.settings[capacityFieldInfo().key] = cargoCapacity;
     await storage.saveSettings(app.settings);
 
     const result = planMining(app.catalog, app.planRequirements, app.inventory, oreChoices, cargoCapacity, harvesterTotals(app.harvesterSlots), app.pendingRefining, assemblyHours);
@@ -744,12 +748,7 @@ export function initPlanTab(app, container) {
       alert("No builds have any items in their plan yet.");
       return;
     }
-    const cargoCapacity = parseFloat(cargoInput.value);
-    if (Number.isNaN(cargoCapacity) || cargoCapacity <= 0) {
-      alert(`${capacityFieldInfo().label.replace(":", "")} must be a positive number.`);
-      return;
-    }
-    app.settings[capacityFieldInfo().key] = cargoCapacity; // echoed for toStorableToMineData below, not persisted here (matches gui.py's _calculate_all_builds)
+    const cargoCapacity = tripCapacity();
 
     const oreChoices = {};
     for (const [item, oreName] of Object.entries(app.settings.ore_choices || {})) {
@@ -920,8 +919,7 @@ export function initPlanTab(app, container) {
       sourcesContainer,
       el("h3", { class: "section-title", text: "Calculate" }),
       el("div", { class: "toolbar" }, [
-        cargoLabel,
-        cargoInput,
+        cargoInfo,
         el("button", { text: "Calculate Plan", onclick: calculatePlan }),
         el("button", { text: "Calculate All Builds", onclick: calculateAllBuilds }),
       ]),
@@ -964,15 +962,8 @@ export function initPlanTab(app, container) {
   // A build may have been renamed from a second dashboard window - see
   // dashboard.js's storage.onChanged "changes.buildLabels" branch.
   app.refreshHooks.planBuildLabels = refreshBuildCombo;
-  // No-arg - re-derives the field's label AND value from app.settings itself
-  // (has_ore_hold may have just flipped in Settings, not just the number),
-  // rather than being handed a single number that no longer says which
-  // setting it belongs to.
-  app.refreshHooks.planCargoCapacity = () => {
-    const info = capacityFieldInfo();
-    cargoLabel.textContent = info.label;
-    cargoInput.value = String(app.settings[info.key]);
-  };
+  // Cargo/Ore Hold changed (a HUD read, e.g. after switching ships).
+  app.refreshHooks.planCargoCapacity = refreshCargoInfo;
   app.refreshHooks.plan = async () => {
     renderSyncStatus();
     if (Object.keys(app.planRequirements).length > 0) await calculatePlan();

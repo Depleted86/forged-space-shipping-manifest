@@ -22,11 +22,11 @@
 // grouping. Only the window-sizing math (resizeToFit()/performResize()) is
 // gone - there's no OS window to size here, just a CSS box.
 
-import { openAddBlueprintModal } from "./overlay-blueprint-modal.js";
+import { openAddToBuildModal } from "./overlay-blueprint-modal.js";
 import { Catalog } from "./catalog.js";
 import * as storage from "./storage.js";
 import { formatHours } from "./dom-helpers.js";
-import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames } from "./calc-engine.js";
+import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint } from "./calc-engine.js";
 
 const MAX_Z_INDEX = 2147483647; // largest valid CSS z-index - guarantees this paints above anything the game's own page sets, regardless of its own stacking contexts
 
@@ -61,7 +61,7 @@ let corpSelectionRowEl = null;
 let corpSelectionSelectEl = null;
 let corpSelectionInfoEl = null;
 let viewToggleEl = null;
-let addBlueprintBtn = null;
+let addToBuildBtn = null;
 let dashboardBtn = null;
 let titleEl = null;
 // Set only while an item is focused AND the panel currently has a
@@ -635,13 +635,13 @@ function buildPanel() {
   titleEl.textContent = "Manifest";
   const actions = document.createElement("div");
   actions.className = "fsc-header-actions";
-  addBlueprintBtn = document.createElement("button");
-  addBlueprintBtn.type = "button";
-  addBlueprintBtn.textContent = "Add Blueprint";
-  addBlueprintBtn.title = "Quickly add/edit a blueprint or add to your active build, without leaving the game";
-  addBlueprintBtn.addEventListener("click", (e) => {
+  addToBuildBtn = document.createElement("button");
+  addToBuildBtn.type = "button";
+  addToBuildBtn.textContent = "Add to Build";
+  addToBuildBtn.title = "Add a blueprint or item to your active build, without leaving the game";
+  addToBuildBtn.addEventListener("click", (e) => {
     e.stopPropagation();
-    openAddBlueprintModal();
+    openAddToBuildModal();
   });
   dashboardBtn = document.createElement("button");
   dashboardBtn.type = "button";
@@ -660,7 +660,7 @@ function buildPanel() {
     e.stopPropagation();
     toggleManifestOverlay();
   });
-  actions.append(addBlueprintBtn, dashboardBtn, closeBtn);
+  actions.append(addToBuildBtn, dashboardBtn, closeBtn);
   header.append(titleEl, actions);
   makeDraggable(panel, header);
 
@@ -717,7 +717,7 @@ function buildPanel() {
   refreshBtn.type = "button";
   refreshBtn.className = "fsc-refresh-btn";
   refreshBtn.textContent = "⟳";
-  refreshBtn.title = "Refresh this farm's numbers - use after changing cargo capacity, inventory, or a Blueprint/Build Order in the dashboard";
+  refreshBtn.title = "Refresh this farm's numbers - use after changing a Build Order in the dashboard";
   refreshBtn.setAttribute("aria-label", "Refresh farm plan");
   refreshBtn.addEventListener("click", (e) => {
     e.stopPropagation();
@@ -751,7 +751,7 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-mark-manifest-selection-complete" }).catch(() => {});
   });
 
-  selectionRowEl.append(selectionLabel, makeClassFilter("fsc-class-filter"), selectionSelectEl, refreshBtn, markCompleteBtn, selectionInfoEl);
+  selectionRowEl.append(selectionLabel, makeClassFilter("fsc-class-filter", "personal"), selectionSelectEl, refreshBtn, markCompleteBtn, selectionInfoEl);
 
   // Corp's own Blueprint/Build Order switcher - exact mirror of the
   // Personal one above (same manifestCorpSelection/manifestCorpToMineData
@@ -794,7 +794,7 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-refresh-manifest-corp-selection" }).catch(() => {});
   });
 
-  corpSelectionRowEl.append(corpSelectionLabel, makeClassFilter("fsc-corp-class-filter"), corpSelectionSelectEl, corpRefreshBtn, corpSelectionInfoEl);
+  corpSelectionRowEl.append(corpSelectionLabel, makeClassFilter("fsc-corp-class-filter", "corp"), corpSelectionSelectEl, corpRefreshBtn, corpSelectionInfoEl);
 
   viewToggleEl = document.createElement("div");
   viewToggleEl.className = "fsc-view-toggle";
@@ -880,7 +880,8 @@ function updateSelectionRowVisibility() {
   if (corpSelectionRowEl) corpSelectionRowEl.classList.toggle("fsc-hidden", currentView !== "corp" || Boolean(focusedItem));
 }
 
-function makeClassFilter(id) {
+// view: "personal" or "corp" - whose selection a class change resets.
+function makeClassFilter(id, view) {
   const select = document.createElement("select");
   select.id = id;
   select.className = "fsc-selection-select fsc-class-filter";
@@ -888,6 +889,16 @@ function makeClassFilter(id) {
   select.title = "Show only blueprints of this class";
   select.addEventListener("change", () => {
     blueprintClassFilter = select.value;
+    // A blueprint picked under the old class goes back to "-- Select --"
+    // rather than lingering in the new class's list; a Build Order isn't
+    // filtered by class, so it stays.
+    if (view === "personal" && manifestSelection?.type === "blueprint") {
+      manifestSelection = null;
+      browser.runtime.sendMessage({ type: "fsc-switch-manifest-selection", selection: null }).catch(() => {});
+    } else if (view === "corp" && manifestCorpSelection?.type === "blueprint") {
+      manifestCorpSelection = null;
+      browser.runtime.sendMessage({ type: "fsc-switch-manifest-corp-selection", selection: null }).catch(() => {});
+    }
     refreshSelectionSelector();
     refreshCorpSelectionSelector();
   });
@@ -1171,6 +1182,11 @@ function makeResizable(panel, handle, corner) {
 }
 
 function emptyMessage() {
+  // A single blueprint whose materials haven't been imported yet needs
+  // nothing, so say where to import it rather than "nothing left".
+  const selection = currentView === "corp" ? manifestCorpSelection : manifestSelection;
+  const blueprint = selection?.type === "blueprint" ? blueprints[selection.name] : null;
+  if (blueprint && !blueprint.hasRecipe()) return blueprintImportHint(blueprint);
   if (currentView === "corp") {
     if (!corpData.available) {
       return "Pick a Blueprint or Build Order above to see what's needed";
@@ -1704,12 +1720,12 @@ function render() {
     if (renderFocusedItem()) {
       // Down to just "Manifest" + the close button, the back link, and the
       // one focused row - the Personal Farm/Corp toggle, whichever Farm
-      // selector row is showing, and the Add Blueprint/Dashboard header
+      // selector row is showing, and the Add to Build/Dashboard header
       // buttons all add nothing useful once you're already looking at a
       // single item (updateSelectionRowVisibility() checks focusedItem
       // itself, same as this).
       viewToggleEl.classList.add("fsc-hidden");
-      addBlueprintBtn.style.display = "none";
+      addToBuildBtn.style.display = "none";
       dashboardBtn.style.display = "none";
       titleEl.textContent = "Manifest (focused)";
       updateSelectionRowVisibility();
@@ -1737,7 +1753,7 @@ function render() {
   }
 
   viewToggleEl.classList.remove("fsc-hidden");
-  addBlueprintBtn.style.display = "";
+  addToBuildBtn.style.display = "";
   dashboardBtn.style.display = "";
   titleEl.textContent = "Manifest";
   updateSelectionRowVisibility();

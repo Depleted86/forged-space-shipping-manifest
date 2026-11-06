@@ -1,118 +1,139 @@
-// Settings tab - cargo capacity and max harvesters. Port of gui.py's
-// _build_settings_tab, minus the two settings that have no analog in the
-// extension: downloads_dir (no filesystem access) and
-// auto_refresh_enabled/refresh_interval_seconds (those governed the
-// CSV-polling schedule; inventory sync here is event-driven off the game's
-// DOM, not a user-configurable poll). Unlike the desktop app, changing max
-// harvesters takes effect immediately - there's no process to restart.
+// Settings tab - the ship capacities read from the game (shown, not
+// editable), moving blueprints and builds to another browser, and backup
+// & restore. Port of gui.py's _build_settings_tab,
+// minus the settings that have no analog in the extension. Cargo and Ore
+// Hold come from the game's top bar (background.js's handleSkillsScrape()),
+// and the harvester slot count lives on the Planets tab, next to the
+// roster it sizes.
 
 import { el } from "./dom-helpers.js";
+import { TRANSFER_FORMAT, TRANSFER_KEYS, TRANSFER_SETTINGS, mergeTransferData, transferConflicts } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
 export function initSettingsTab(app, container) {
-  const cargoInput = el("input", { type: "text", value: String(app.settings.cargo_capacity) });
-  const maxHarvestersInput = el("input", { type: "text", value: String(app.maxHarvesters) });
-
-  // Ore Hold - some ships have one dedicated to raw ore, separate from
-  // general cargo space, so mining/refining trip counts need a different
-  // capacity than everything else uses (see storage.js's has_ore_hold/
-  // ore_hold_capacity comment). The capacity field only makes sense once the
-  // checkbox is checked, so it's hidden rather than just inert when it isn't
-  // - an always-visible-but-ignored number field would be confusing.
-  const hasOreHoldInput = el("input", { type: "checkbox", checked: app.settings.has_ore_hold ? "" : undefined });
-  const oreHoldCapacityInput = el("input", { type: "text", value: String(app.settings.ore_hold_capacity) });
-  const oreHoldCapacityRow = el("div", { class: "field-row", style: app.settings.has_ore_hold ? "" : "display:none" }, [
-    el("label", { text: "Ore Hold capacity per trip:" }),
-    oreHoldCapacityInput,
-  ]);
-  hasOreHoldInput.addEventListener("change", () => {
-    oreHoldCapacityRow.style.display = hasOreHoldInput.checked ? "" : "none";
-    // Immediate, not debounced - a checkbox toggle has no "still typing" to
-    // wait out, unlike the text fields below. autoSaveNow() is declared
-    // later in this function but safe to reference here - function
-    // declarations are hoisted, and this callback only ever actually runs
-    // on a later "change" event, well after everything's initialized.
-    autoSaveNow();
-  });
-
-  const statusText = el("div", { class: "status-text" });
-
-  // Auto-save, standardized with how the rest of the app already behaves
-  // (the harvester roster below commits on blur/change with no Save button;
-  // every Manifest overlay control applies instantly) - this tab was the
-  // odd one out, requiring an explicit click. Errors surface inline in
-  // statusText instead of alert() - a blocking modal firing mid-typing (or
-  // on every debounced tick while a field is momentarily invalid) would be
-  // far more disruptive here than it was as a one-shot button-click check.
-  // An invalid field simply isn't persisted (whatever was last validly
-  // saved stays in storage) until it's fixed.
-  async function save() {
-    const cargo = parseFloat(cargoInput.value);
-    if (Number.isNaN(cargo) || cargo <= 0) {
-      statusText.textContent = "Cargo capacity must be a positive number.";
-      statusText.className = "status-text status-warn";
-      return;
-    }
-    const maxHarvesters = parseInt(maxHarvestersInput.value, 10);
-    if (Number.isNaN(maxHarvesters) || maxHarvesters <= 0) {
-      statusText.textContent = "Max harvesters must be a positive whole number.";
-      statusText.className = "status-text status-warn";
-      return;
-    }
-    let oreHoldCapacity = app.settings.ore_hold_capacity;
-    if (hasOreHoldInput.checked) {
-      oreHoldCapacity = parseFloat(oreHoldCapacityInput.value);
-      if (Number.isNaN(oreHoldCapacity) || oreHoldCapacity <= 0) {
-        statusText.textContent = "Ore Hold capacity must be a positive number.";
-        statusText.className = "status-text status-warn";
-        return;
-      }
-    }
-
-    app.settings.cargo_capacity = cargo;
-    app.settings.max_harvesters = maxHarvesters;
-    app.settings.has_ore_hold = hasOreHoldInput.checked;
-    app.settings.ore_hold_capacity = oreHoldCapacity;
-    await storage.saveSettings(app.settings);
-
-    if (maxHarvesters !== app.maxHarvesters) {
-      app.maxHarvesters = maxHarvesters;
-      app.harvesterSlots = await storage.loadHarvesterSlots(maxHarvesters);
-      if (app.refreshHooks.planets) app.refreshHooks.planets();
-    }
-    // No-arg - the Plan a Build tab re-derives its own field's label/value/
-    // storage-key from app.settings itself (has_ore_hold, cargo_capacity,
-    // ore_hold_capacity all just got updated above), rather than being
-    // handed a single number that no longer says which setting it belongs to.
-    if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
-
-    statusText.textContent = "Settings saved.";
-    statusText.className = "status-text status-ok";
+  const shipInfo = el("div", { class: "status-text" });
+  function refreshShipInfo() {
+    const s = app.settings;
+    shipInfo.textContent = s.has_ore_hold
+      ? `Cargo capacity: ${s.cargo_capacity}. Ore Hold: ${s.ore_hold_capacity} (used for mining trips).`
+      : `Cargo capacity: ${s.cargo_capacity} (used for mining trips). No Ore Hold on this ship.`;
   }
 
-  // "After entry has stopped" - debounced, not per-keystroke (parseFloat
-  // running, and a save round-trip firing, on every single character while
-  // someone's still mid-typing "600" would be wasteful and could flash a
-  // spurious validation error at intermediate states). blur() saves
-  // immediately (matches the harvester roster's own commit-on-blur below) so
-  // tabbing away doesn't sit waiting on the debounce timer for no reason.
-  const AUTOSAVE_DEBOUNCE_MS = 600;
-  let debounceTimer = null;
-  function autoSaveDebounced() {
-    clearTimeout(debounceTimer);
-    debounceTimer = setTimeout(save, AUTOSAVE_DEBOUNCE_MS);
+  // --- Move to another browser or PC ---
+  // Blueprints, assembly plans and saved builds (personal and corp) as a
+  // downloaded .json file, merged on import - see mergeTransferData() in
+  // calc-engine.js. The same <a download> blob click as the Corp tab's CSV
+  // export, so no "downloads" permission is needed.
+  const transferStatus = el("div", { class: "status-text" });
+
+  async function exportTransferFile() {
+    const data = await browser.storage.local.get(TRANSFER_KEYS);
+    if (data.settings) data.settings = Object.fromEntries(TRANSFER_SETTINGS.filter((f) => f in data.settings).map((f) => [f, data.settings[f]]));
+    const blob = new Blob([JSON.stringify({ format: TRANSFER_FORMAT, version: 1, exported: new Date().toISOString(), ...data }, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    const a = el("a", { href: url, download: `forged-space-blueprints-builds-${dateStamp}.json` });
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    const bpCount = Object.keys(data.blueprints || {}).length;
+    const buildCount = Object.keys(data.builds || {}).length;
+    const slotCount = (data.harvesters || []).filter((slot) => slot && slot.resource).length;
+    transferStatus.textContent = `Exported ${bpCount} blueprint${bpCount === 1 ? "" : "s"}, ${buildCount} build${buildCount === 1 ? "" : "s"} and ${slotCount} harvester assignment${slotCount === 1 ? "" : "s"}.`;
+    transferStatus.className = "status-ok";
   }
-  function autoSaveNow() {
-    clearTimeout(debounceTimer);
-    save();
-  }
-  for (const input of [cargoInput, oreHoldCapacityInput, maxHarvestersInput]) {
-    input.addEventListener("input", autoSaveDebounced);
-    input.addEventListener("blur", autoSaveNow);
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") autoSaveNow();
+
+  // Allow/Skip for an import that would change something set by hand here -
+  // resolves true for Allow. `lines` are shown under the message.
+  function askAllowSkip(title, message, lines) {
+    return new Promise((resolve) => {
+      const allowBtn = el("button", { text: "Allow" });
+      const skipBtn = el("button", { text: "Skip" });
+      const overlay = el("div", { class: "modal-overlay" }, [
+        el("div", { class: "modal-box" }, [
+          el("h3", { text: title }),
+          el("div", { class: "hint", text: message }),
+          ...lines.map((line) => el("div", { class: "status-text", text: line })),
+          el("div", { class: "toolbar" }, [allowBtn, skipBtn]),
+        ]),
+      ]);
+      const finish = (allow) => {
+        overlay.remove();
+        resolve(allow);
+      };
+      allowBtn.addEventListener("click", () => finish(true));
+      skipBtn.addEventListener("click", () => finish(false));
+      document.body.appendChild(overlay);
     });
   }
+
+  function describeRoster(slots, count) {
+    const assigned = (slots || []).slice(0, count ?? Infinity).filter((slot) => slot && slot.resource);
+    const list = assigned.map((slot) => `${slot.resource} ${slot.rate}`).join(", ");
+    return `${count ?? (slots || []).length} slots${list ? ` - ${list}` : ""}`;
+  }
+
+  const transferFileInput = el("input", { type: "file", accept: ".json,application/json", style: "display:none" });
+  transferFileInput.addEventListener("change", async () => {
+    const file = transferFileInput.files[0];
+    transferFileInput.value = ""; // reset so re-selecting the same file still fires "change"
+    if (!file) return;
+    let blob;
+    try {
+      blob = JSON.parse(await file.text());
+    } catch (e) {
+      alert("That file isn't valid JSON.");
+      return;
+    }
+    if (blob && typeof blob === "object") {
+      for (const [oldKey, newKey] of Object.entries(LEGACY_IMPORT_KEY_MAP)) {
+        if (oldKey in blob && !(newKey in blob)) blob[newKey] = blob[oldKey];
+      }
+    }
+    if (!blob || typeof blob !== "object" || !["blueprints", "assemblyPlans", "builds", "harvesters", "scrapedPlanetTypes"].some((k) => k in blob)) {
+      alert("No blueprints, builds or harvesters found in that file - pick one exported from this section.");
+      return;
+    }
+    const current = await browser.storage.local.get(TRANSFER_KEYS);
+    const conflicts = transferConflicts(current, blob);
+    const replace = {};
+    if (conflicts.harvesters) {
+      replace.harvesters = await askAllowSkip("Harvester settings", "The imported file changes your harvester settings.", [
+        `Yours: ${describeRoster(current.harvesters, current.settings?.max_harvesters)}`,
+        `File: ${describeRoster(blob.harvesters, blob.settings?.max_harvesters)}`,
+      ]);
+    }
+    if (conflicts.choices.length > 0) {
+      const mine = current.settings || {};
+      const theirs = blob.settings || {};
+      const describe = (settings, item) => [settings.ore_choices?.[item], settings.item_acquisition_mode?.[item]].filter(Boolean).join(", ");
+      replace.choices = await askAllowSkip(
+        "Ore and buy/craft choices",
+        "The imported file changes your ore or buy/craft choices for these items.",
+        conflicts.choices.map((item) => `${item}: yours ${describe(mine, item) || "-"}, file ${describe(theirs, item) || "-"}`)
+      );
+    }
+    const { data, counts } = mergeTransferData(current, blob, replace);
+    if (replace.choices) counts.choices = conflicts.choices.length;
+    if (counts.blueprints + counts.assemblyPlans + counts.builds + counts.harvesters + counts.planetTypes + (counts.choices || 0) === 0) {
+      transferStatus.textContent = "Nothing new in that file - everything in it is already here.";
+      transferStatus.className = "status-ok";
+      return;
+    }
+    await browser.storage.local.set(data);
+    const parts = [
+      `${counts.blueprints} blueprint${counts.blueprints === 1 ? "" : "s"}`,
+      `${counts.assemblyPlans} assembly plan${counts.assemblyPlans === 1 ? "" : "s"}`,
+      `${counts.builds} build${counts.builds === 1 ? "" : "s"}`,
+    ];
+    if (counts.harvesters) parts.push(`${counts.harvesters} harvester assignment${counts.harvesters === 1 ? "" : "s"}`);
+    if (counts.choices) parts.push(`${counts.choices} updated ore/buy choice${counts.choices === 1 ? "" : "s"}`);
+    if (counts.planetTypes) parts.push(`${counts.planetTypes} planet type${counts.planetTypes === 1 ? "" : "s"}`);
+    transferStatus.textContent = `Added ${parts.join(", ")}${counts.buildsSkipped ? ` (${counts.buildsSkipped} build${counts.buildsSkipped === 1 ? " was" : "s were"} already here)` : ""}. Reloading...`;
+    transferStatus.className = "status-ok";
+    setTimeout(() => location.reload(), 1500);
+  });
 
   // --- Backup & restore ---
   // browser.storage.local has no built-in export UI, and its data is scoped
@@ -188,36 +209,24 @@ export function initSettingsTab(app, container) {
     setTimeout(() => location.reload(), 800);
   }
 
-  // Only shown the very first time the dashboard is ever opened (see
-  // dashboard.js's bootstrap(), which also lands the user on this tab in
-  // that case) - a nudge to fill in the numbers every trip/mining
-  // calculation across the app depends on before doing anything else.
-  const welcomeHint = app.isFirstLaunch
-    ? el("div", {
-        class: "hint",
-        text: "Welcome! Fill in your cargo capacity (and Ore Hold, if your ship has one) and max harvesters below - saved automatically as you go - these drive every trip and mining calculation across the app.",
-      })
-    : null;
-
-  // Cargo/Ore Hold read from the game's HUD (background.js's
-  // handleSkillsScrape()) - reflect them here, but never over a field the
-  // player is typing in.
-  app.refreshHooks.settingsFields = () => {
-    if (document.activeElement !== cargoInput) cargoInput.value = String(app.settings.cargo_capacity);
-    if (document.activeElement !== oreHoldCapacityInput) oreHoldCapacityInput.value = String(app.settings.ore_hold_capacity);
-    hasOreHoldInput.checked = !!app.settings.has_ore_hold;
-    oreHoldCapacityRow.style.display = hasOreHoldInput.checked ? "" : "none";
-  };
+  // Cargo/Ore Hold read from the game's HUD - see dashboard.js's
+  // storage.onChanged listener.
+  app.refreshHooks.settingsFields = refreshShipInfo;
+  refreshShipInfo();
 
   container.appendChild(
     el("div", {}, [
-      welcomeHint,
-      el("div", { class: "field-row" }, [el("label", { text: "Cargo capacity per trip:" }), cargoInput]),
-      el("div", { class: "field-row" }, [el("label", { text: "Do you have an Ore Hold?" }), hasOreHoldInput]),
-      oreHoldCapacityRow,
-      el("div", { class: "hint", text: "Cargo and Ore Hold fill in from the game's top bar while it's open - mining trips use the Ore Hold when your ship has one, otherwise cargo. You can still type them here." }),
-      el("div", { class: "field-row" }, [el("label", { text: "Max harvesters at once:" }), maxHarvestersInput]),
-      statusText,
+      el("h3", { class: "section-title", text: "Your ship" }),
+      shipInfo,
+      el("div", { class: "hint", text: "Read from the game's top bar while it's open - switching ships updates these. Mining trips use the Ore Hold when your ship has one, otherwise cargo." }),
+      el("h3", { class: "section-title", text: "Move to another browser or PC" }),
+      el("div", { class: "hint", text: "Save your blueprints, assembly plans, builds (including corp builds), harvester slots and planet types to a file, then import it in the extension on the other browser or PC. Importing adds to what's already there, and blueprints already read from the game there are kept. If the file would change your harvester settings or ore/buy choices, you're asked first." }),
+      el("div", { class: "toolbar" }, [
+        el("button", { text: "Export to File", onclick: exportTransferFile }),
+        el("button", { text: "Import from File...", onclick: () => transferFileInput.click() }),
+      ]),
+      transferFileInput,
+      transferStatus,
       el("h3", { class: "section-title", text: "Backup & restore" }),
       el("div", { class: "hint", text: "Export everything (blueprints, inventory, settings, builds, etc.) as JSON, or paste a previous export back in to restore it." }),
       el("div", { class: "toolbar" }, [el("button", { text: "Export Current Data", onclick: runExport })]),

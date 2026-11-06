@@ -1,23 +1,17 @@
-// In-page "Add Blueprint" modal - a quick-access alternative to switching
-// over to the dashboard's Blueprints tab / Plan a Build tab just to define a
-// blueprint or add something to the active build. Opened from the Manifest
-// overlay's "Add Blueprint" button (see overlay-manifest.js) or wherever
-// else wants it; renders directly into the game page (own Shadow DOM host,
-// same reasoning as the Manifest overlay itself - see content.js's header
-// comment) so it never requires leaving the game or switching tabs.
+// In-page "Add to Build" modal - a quick-access alternative to switching
+// over to the dashboard's Plan a Build tab just to add something to the
+// active build. Opened from the Manifest overlay's "Add to Build" button
+// (see overlay-manifest.js); renders directly into the game page (own
+// Shadow DOM host, same reasoning as the Manifest overlay itself - see
+// content.js's header comment) so it never requires leaving the game or
+// switching tabs.
 //
-// Covers two things in one place, since going back and forth between them
-// (define a blueprint, then immediately want it in your active build) is
-// the common case:
-//   1. Blueprint editor - create/edit a named Blueprint and its item/qty
-//      requirements (a trimmed-down version of tab-blueprints.js's CRUD
-//      editor - no Captain Level tracking here, that's display-only and not
-//      worth the extra UI for a quick-entry tool).
-//   2. Add to active build - add a saved blueprint (scaled by qty) or an
-//      ad-hoc item+qty directly to whichever build is currently active in
-//      Plan a Build (same entry shape addBlueprintToPlan()/
-//      addMaterialToPlan() already produce there, so anything added here is
-//      fully visible/editable from the dashboard afterward too).
+// Adds a saved blueprint (scaled by qty) or an ad-hoc item+qty directly to
+// whichever build is currently active in Plan a Build (same entry shape
+// addBlueprintToPlan()/addMaterialToPlan() already produce there, so
+// anything added here is fully visible/editable from the dashboard
+// afterward too). Blueprints themselves aren't entered here - they come
+// from the game's blueprint stores.
 //
 // Content scripts have direct browser.storage.local access (the "storage"
 // permission covers the whole extension, not just its own pages), so this
@@ -26,7 +20,6 @@
 
 import { el, clear, enableInlineAutocomplete } from "./dom-helpers.js";
 import { Catalog } from "./catalog.js";
-import { Blueprint } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
 const MAX_Z_INDEX = 2147483647;
@@ -80,13 +73,6 @@ const STYLE = `
   .fsc-modal-body {
     padding: 12px;
   }
-  .fsc-section-title {
-    color: #67e8f9;
-    font-size: 13px;
-    font-weight: 600;
-    margin: 14px 0 6px;
-  }
-  .fsc-section-title:first-child { margin-top: 0; }
   .fsc-field-row {
     display: flex;
     align-items: center;
@@ -126,38 +112,6 @@ const STYLE = `
   button.fsc-primary { border-color: #22d3ee; color: #67e8f9; }
   button.fsc-danger { border-color: #f87171; color: #f87171; }
   .fsc-close-btn { font-size: 14px; padding: 3px 8px; }
-  .fsc-req-list {
-    list-style: none;
-    margin: 6px 0;
-    padding: 0;
-    max-height: 140px;
-    overflow-y: auto;
-    border: 1px solid #334155;
-    border-radius: 6px;
-  }
-  .fsc-req-list li {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-bottom: 1px solid #1e293b;
-    font-size: 12px;
-  }
-  .fsc-req-list li:last-child { border-bottom: none; }
-  .fsc-req-list li span:first-child {
-    flex: 1 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .fsc-req-list li span:nth-child(2) {
-    flex: 0 0 auto;
-    min-width: 3.5em;
-    text-align: right;
-    color: #94a3b8;
-  }
-  .fsc-req-list button { flex: 0 0 auto; padding: 1px 6px; font-size: 11px; }
   .fsc-status {
     font-size: 12px;
     color: #94a3b8;
@@ -183,11 +137,6 @@ let builds = {};
 let activeBuildName = null;
 let buildLabels = {}; // buildId -> custom display name, mirrors storage.js's `buildLabels` key
 
-// Scratch state for the blueprint editor - itemName -> qty, not persisted
-// until Save.
-let editingBlueprintName = null;
-let editingRequirements = {};
-
 function ensureHost() {
   if (shadowRoot) return;
   const host = document.createElement("div");
@@ -211,7 +160,7 @@ function ensureHost() {
   // document-level mousemove/mouseup listeners there would pile up a fresh,
   // never-removed pair every time the modal is opened.
   const closeBtn = el("button", { class: "fsc-close-btn", text: "×", title: "Close", onclick: closeModal });
-  const header = el("div", { class: "fsc-modal-header" }, [el("h2", { text: "Quick Blueprint & Plan Entry" }), closeBtn]);
+  const header = el("div", { class: "fsc-modal-header" }, [el("h2", { text: "Add to Active Build" }), closeBtn]);
   bodyEl = el("div", { class: "fsc-modal-body" });
   modalEl = el("div", { class: "fsc-modal" }, [header, bodyEl]);
   modalEl.addEventListener("mousedown", (e) => e.stopPropagation());
@@ -222,8 +171,7 @@ function ensureHost() {
 // Drag-to-reposition via the header, same pattern as the Manifest overlay's
 // own panel (overlay-manifest.js's makeDraggable) - lets the modal be moved
 // off to the side so it doesn't block the Manifest overlay or game content
-// underneath while a blueprint is being entered (e.g. read from another
-// in-game window at the same time). The modal starts centered by the
+// underneath. The modal starts centered by the
 // backdrop's flex layout; switching to position:fixed with an explicit
 // left/top the moment a drag starts takes it out of that flow without a
 // visible jump, since the rect is read before anything changes.
@@ -281,11 +229,9 @@ async function loadLiveData() {
   buildLabels = await storage.loadBuildLabels();
 }
 
-export async function openAddBlueprintModal() {
+export async function openAddToBuildModal() {
   ensureHost();
   await loadLiveData();
-  editingBlueprintName = null;
-  editingRequirements = {};
   renderModal();
   backdropEl.classList.add("fsc-visible");
 }
@@ -294,127 +240,9 @@ function itemCandidates() {
   return [...new Set([...catalog.allItemNames(), ...Object.keys(assemblyPlans)])];
 }
 
-function kindLabelFor(name) {
-  const [kind] = catalog.classify(name);
-  return { material: "Refined", ore: "Raw Ore", planet_resource: "Planetary", unknown: "Commodity" }[kind];
-}
-
 function renderModal() {
   clear(bodyEl);
-  bodyEl.append(buildBlueprintEditorSection(), buildAddToPlanSection());
-}
-
-// ---- Blueprint editor ----
-function buildBlueprintEditorSection() {
-  const nameDatalistId = "fsc-blueprint-name-list";
-  const nameDatalist = el("datalist", { id: nameDatalistId }, Object.keys(blueprints).sort().map((n) => el("option", { value: n })));
-  const nameInput = el("input", { type: "text", list: nameDatalistId, placeholder: "Blueprint name (existing or new)", value: editingBlueprintName || "" });
-
-  const itemDatalistId = "fsc-blueprint-item-list";
-  const itemDatalist = el("datalist", { id: itemDatalistId }, itemCandidates().map((n) => el("option", { value: n })));
-  const itemInput = el("input", { type: "text", list: itemDatalistId, placeholder: "Item name" });
-  enableInlineAutocomplete(itemInput, itemCandidates);
-  const qtyInput = el("input", { class: "fsc-qty-input", type: "text", value: "1", placeholder: "Qty" });
-
-  const reqList = el("ul", { class: "fsc-req-list" });
-  const status = el("div", { class: "fsc-status" });
-
-  function renderReqList() {
-    clear(reqList);
-    for (const name of Object.keys(editingRequirements).sort()) {
-      const removeBtn = el("button", {
-        class: "fsc-danger",
-        text: "×",
-        title: `Remove ${name}`,
-        onclick: () => {
-          delete editingRequirements[name];
-          renderReqList();
-        },
-      });
-      reqList.appendChild(el("li", {}, [el("span", { text: `${name} (${kindLabelFor(name)})` }), el("span", { text: `×${editingRequirements[name]}` }), removeBtn]));
-    }
-    if (Object.keys(editingRequirements).length === 0) {
-      reqList.appendChild(el("li", {}, [el("span", { text: "No items yet - add some below." })]));
-    }
-  }
-
-  function loadNamedBlueprint(name) {
-    editingBlueprintName = name;
-    editingRequirements = { ...(blueprints[name]?.requirements || {}) };
-    renderReqList();
-    status.textContent = "";
-  }
-  nameInput.addEventListener("change", () => {
-    const name = nameInput.value.trim();
-    if (name && blueprints[name]) loadNamedBlueprint(name);
-  });
-
-  function addItem() {
-    const name = itemInput.value.trim();
-    const qty = parseFloat(qtyInput.value);
-    if (!name || Number.isNaN(qty) || qty <= 0) {
-      status.textContent = "Enter an item name and a positive quantity.";
-      status.className = "fsc-status";
-      return;
-    }
-    editingRequirements[name] = qty;
-    itemInput.value = "";
-    qtyInput.value = "1";
-    itemInput.focus();
-    renderReqList();
-    status.textContent = "";
-  }
-  const addBtn = el("button", { text: "Add", onclick: addItem });
-  qtyInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      addItem();
-    }
-  });
-
-  async function saveBlueprint() {
-    const name = nameInput.value.trim();
-    if (!name) {
-      status.textContent = "Enter a blueprint name.";
-      status.className = "fsc-status";
-      return;
-    }
-    if (Object.keys(editingRequirements).length === 0) {
-      status.textContent = "Add at least one item.";
-      status.className = "fsc-status";
-      return;
-    }
-    const blueprint = new Blueprint(name);
-    for (const [itemName, qty] of Object.entries(editingRequirements)) blueprint.setRequirement(itemName, qty);
-    // Preserve captainLevel if editing an existing blueprint that already
-    // had one (set via an Assembler Plans import elsewhere) - this quick
-    // editor has no field for it, but shouldn't silently wipe it either.
-    blueprint.captainLevel = blueprints[name]?.captainLevel ?? null;
-    if (editingBlueprintName && editingBlueprintName !== name) delete blueprints[editingBlueprintName];
-    blueprints[name] = blueprint;
-    await storage.saveBlueprints(blueprints);
-    editingBlueprintName = name;
-    clear(nameDatalist);
-    for (const n of Object.keys(blueprints).sort()) nameDatalist.appendChild(el("option", { value: n }));
-    status.textContent = `Saved "${name}".`;
-    status.className = "fsc-status fsc-ok";
-    refreshAddToPlanBlueprintOptions();
-  }
-  const saveBtn = el("button", { class: "fsc-primary", text: "Save Blueprint", onclick: saveBlueprint });
-
-  renderReqList();
-
-  return el("div", {}, [
-    el("div", { class: "fsc-section-title", text: "Blueprint" }),
-    el("div", { class: "fsc-hint", text: "Pick an existing blueprint to edit, or type a new name." }),
-    el("div", { class: "fsc-field-row" }, [nameInput]),
-    nameDatalist,
-    el("div", { class: "fsc-field-row" }, [itemInput, qtyInput, addBtn]),
-    itemDatalist,
-    reqList,
-    el("div", { class: "fsc-field-row" }, [saveBtn]),
-    status,
-  ]);
+  bodyEl.append(buildAddToPlanSection());
 }
 
 // ---- Add to active build ----
@@ -427,10 +255,8 @@ function refreshAddToPlanBlueprintOptions() {
 }
 
 function buildAddToPlanSection() {
-  const title = el("div", { class: "fsc-section-title", text: "Add to Active Build" });
-
   if (!activeBuildName) {
-    return el("div", {}, [title, el("div", { class: "fsc-hint", text: "No active build - open the dashboard's Plan a Build tab to create/select one first." })]);
+    return el("div", {}, [el("div", { class: "fsc-hint", text: "No active build - open the dashboard's Plan a Build tab to create/select one first." })]);
   }
 
   const status = el("div", { class: "fsc-status" });
@@ -478,7 +304,6 @@ function buildAddToPlanSection() {
   const addItemBtn = el("button", { class: "fsc-primary", text: "Add", onclick: addMaterialToPlan });
 
   return el("div", {}, [
-    title,
     el("div", { class: "fsc-hint", text: `Adding to build "${buildLabels[activeBuildName] || activeBuildName}".` }),
     el("div", { class: "fsc-field-row" }, [el("label", { text: "Blueprint:" }), addToPlanBlueprintSelect, blueprintQtyInput, addBlueprintBtn]),
     el("div", { class: "fsc-field-row" }, [el("label", { text: "Item:" }), materialInput, materialQtyInput, addItemBtn]),

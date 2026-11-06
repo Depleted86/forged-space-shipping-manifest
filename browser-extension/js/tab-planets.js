@@ -6,6 +6,9 @@ import { el, clear } from "./dom-helpers.js";
 import { harvesterTotals } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
+// The game's cap once every harvester slot has been bought.
+const MAX_HARVESTER_SLOTS = 10;
+
 export function initPlanetsTab(app, container) {
   let planetSearch = "";
   let selectedResource = "";
@@ -159,9 +162,33 @@ export function initPlanetsTab(app, container) {
     renderHarvesterSummary();
   }
 
+  const rosterTitle = el("h3", { class: "section-title" });
+
+  // Slot count picker - how many harvester slots the player owns, which
+  // sizes the roster above. Saved to settings.max_harvesters.
+  const slotCountSelect = el(
+    "select",
+    { id: "harvester-slot-count" },
+    Array.from({ length: MAX_HARVESTER_SLOTS }, (_, i) => el("option", { value: String(i + 1), text: String(i + 1) }))
+  );
+  slotCountSelect.value = String(app.maxHarvesters);
+  slotCountSelect.addEventListener("change", () => setSlotCount(parseInt(slotCountSelect.value, 10)));
+
+  async function setSlotCount(count) {
+    app.maxHarvesters = count;
+    app.settings.max_harvesters = count;
+    app.harvesterSlots = await storage.loadHarvesterSlots(count);
+    await storage.saveSettings(app.settings);
+    renderRoster();
+    renderUsage();
+    renderHarvesterSummary();
+  }
+
   function renderUsage() {
-    const used = app.harvesterSlots.filter((s) => s.resource).length;
+    const used = app.harvesterSlots.filter((s) => s && s.resource).length;
     usageLabel.textContent = `${used} / ${app.maxHarvesters} harvester slots assigned`;
+    rosterTitle.textContent = `Harvesters (${app.maxHarvesters} max at a time)`;
+    if (document.activeElement !== slotCountSelect) slotCountSelect.value = String(app.maxHarvesters);
   }
 
   container.appendChild(
@@ -173,7 +200,11 @@ export function initPlanetsTab(app, container) {
       el("h3", { class: "section-title", text: "Quick rate lookup" }),
       el("div", { class: "toolbar" }, [resourceSelectLabel, resourceSelect]),
       summaryLabel,
-      el("h3", { class: "section-title", text: `Harvesters (${app.maxHarvesters} max at a time)` }),
+      rosterTitle,
+      el("div", { class: "field-row" }, [
+        el("label", { for: "harvester-slot-count", text: "Harvester slots owned:" }),
+        slotCountSelect,
+      ]),
       rosterBody,
       usageLabel,
     ])

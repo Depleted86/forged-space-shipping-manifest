@@ -43,7 +43,7 @@ export class Blueprint {
   }
 
   // A blueprint added from the store list has no materials until it's
-  // opened in the store's detail panel (or entered by hand).
+  // opened in the store's detail panel.
   hasRecipe() {
     return Object.keys(this.requirements).length > 0;
   }
@@ -79,31 +79,60 @@ export function shipClassLabel(value) {
   return value === "" ? "All classes" : value === NO_SHIP_CLASS ? "(no class)" : value;
 }
 
-// Which store a blueprint came from, as a dropdown group heading. Module
-// stores are titled by maker ("Kriton Blueprints") and share "Modules".
-// Blueprints scraped before the store name was recorded are placed by what
-// only that store shows (Ship Value, Engineering to fit) until the store is
-// opened again; hand-entered ones go under "Other".
-export const STORE_GROUPS = ["Blueprints", "Ships", "Auxiliary Systems", "Modules", "Other"];
+// Which store a blueprint came from, as a dropdown group heading. Store
+// titles follow no single pattern ("Blueprint Store", "Kriton Blueprints",
+// "Sabre Shield Systems"), so the category in the store's subtitle
+// ("Mercenur - Shield Blueprints") decides it; a category not listed in
+// STORE_CATEGORY_GROUPS gets its own group ("Weapon" -> "Weapons").
+// Blueprints saved before the category was recorded fall back to the store
+// title, or to what only that store shows (Ship Value, Engineering to fit),
+// until the store is opened again; hand-entered ones go under "Other".
+export const STORE_GROUPS = ["Blueprints", "Ships", "Auxiliary Systems", "Modules", "Shields", "Other"];
+
+const STORE_CATEGORY_GROUPS = {
+  Manufacturing: "Blueprints",
+  Starship: "Ships",
+  Auxiliary: "Auxiliary Systems",
+  "Ship Module": "Modules",
+  Shield: "Shields",
+};
 
 export function blueprintStoreGroup(blueprint) {
   const st = blueprint?.store;
+  const category = st?.storeCategory;
+  if (category) return STORE_CATEGORY_GROUPS[category] || `${category}s`;
   const name = st?.storeName;
   if (name === "Blueprint Store") return "Blueprints";
   if (name === "Starship Blueprint Store") return "Ships";
   if (name === "Auxiliary Systems") return "Auxiliary Systems";
-  if (name && /\sBlueprints$/.test(name)) return "Modules";
+  if (name && /\bShield\b/.test(name)) return "Shields";
+  if (name) return "Modules";
   if (st?.shipValue != null) return "Ships";
   if (st?.engReq != null) return "Modules";
   return "Other";
 }
 
 // names (already sorted however the caller wants) split into
-// [[group, names], ...] in STORE_GROUPS order, empty groups left out.
+// [[group, names], ...] in STORE_GROUPS order - any new store category's
+// group just before "Other" - with empty groups left out.
 export function groupBlueprintNames(names, blueprints) {
   const byGroup = new Map(STORE_GROUPS.map((g) => [g, []]));
-  for (const name of names) byGroup.get(blueprintStoreGroup(blueprints[name])).push(name);
-  return [...byGroup].filter(([, list]) => list.length > 0);
+  for (const name of names) {
+    const group = blueprintStoreGroup(blueprints[name]);
+    if (!byGroup.has(group)) byGroup.set(group, []);
+    byGroup.get(group).push(name);
+  }
+  const groups = [...byGroup].filter(([, list]) => list.length > 0);
+  const rank = (g) => (g === "Other" ? Infinity : STORE_GROUPS.includes(g) ? STORE_GROUPS.indexOf(g) : STORE_GROUPS.length - 1);
+  return groups.sort((a, b) => rank(a[0]) - rank(b[0]));
+}
+
+// Shown wherever a blueprint with no materials yet is picked - the game
+// only shows a recipe once the blueprint is opened in its store, which is
+// what imports it (background.js's handleBlueprintStoreScrape()).
+export function blueprintImportHint(blueprint) {
+  const store = blueprint?.store?.storeName || "Blueprint Store";
+  return `View in the ${store}${/store$/i.test(store) ? "" : " store"} to import it and track the needed resources.`;
 }
 
 // How a Commodity is produced at the Assembly. Production happens in
@@ -986,4 +1015,168 @@ export function parseCorpCsv(text) {
     }
   }
   return { needs, haves };
+}
+
+// ---- Transfer file (Settings > Move to another browser or PC) ----
+// Blueprints, assembly plans, saved builds - personal and corp alike,
+// since the Corp tab tracks builds from the same `builds` store - harvester
+// slots and Lexicon planet types, carried between browsers as one JSON
+// file. Of `settings`, only what's set by hand travels
+// (TRANSFER_SETTINGS); cargo and skills are re-read from the game. The keys
+// match browser.storage.local's own, so a full Backup & restore export
+// imports here too.
+export const TRANSFER_FORMAT = "fsc-transfer";
+export const TRANSFER_KEYS = ["blueprints", "assemblyPlans", "builds", "buildLabels", "activeBuildName", "activeCorpBuildName", "corpHaveOverrides", "harvesters", "scrapedPlanetTypes", "planetSyncMeta", "settings"];
+export const TRANSFER_SETTINGS = ["max_harvesters", "ore_choices", "item_acquisition_mode"];
+
+// Merges an imported transfer file into this browser's current data
+// (`current` has the same keys) instead of replacing it, so importing into
+// a browser that has already picked up a few store blueprints loses
+// nothing:
+// - Blueprints/assembly plans: names not already here are added. One here
+//   with materials was read from the game in this browser, so it's kept;
+//   one here without (only seen in a store list) gets the file's materials,
+//   keeping this browser's store info.
+// - Builds: each is added under its own id when free, otherwise the lowest
+//   unused one (the same rule as tab-plan.js's nextBuildNumber()), with its
+//   custom name carried along. A build identical to one already here (same
+//   name and entries) is skipped, so importing the same file twice doesn't
+//   duplicate anything.
+// - Active build / active corp build: taken from the file only when none is
+//   selected here.
+// - Corp "Have" overrides and Lexicon planet types: added for names
+//   without one here.
+// - Ore choices and buy/craft modes: added for items without one here; with
+//   `replace.choices`, the file's win where both have one.
+// - Harvester slots: taken from the file, with its slot count, when no slot
+//   here has a resource assigned, or with `replace.harvesters` - two rosters
+//   don't combine sensibly, so it's one or the other.
+// transferConflicts() says which of those the player should be asked about.
+// Returns { data, counts } - `data` is the full set of TRANSFER_KEYS to
+// write, `counts` what was added/skipped for the status line.
+function hasHarvesterAssignments(slots) {
+  return (slots || []).some((slot) => slot && slot.resource);
+}
+
+// What importing `incoming` would change that the player set by hand here,
+// for the Allow/Skip prompts: `harvesters` when both have an assigned
+// roster and they differ (slots or slot count), `choices` listing the items
+// whose ore choice or buy/craft mode differs. Missing ones are just added,
+// so they aren't conflicts.
+export function transferConflicts(current, incoming) {
+  const here = current.settings || {};
+  const there = incoming.settings || {};
+  const slotsHere = (current.harvesters || []).slice(0, here.max_harvesters ?? Infinity);
+  const slotsThere = (incoming.harvesters || []).slice(0, there.max_harvesters ?? Infinity);
+  const harvesters =
+    hasHarvesterAssignments(slotsHere) &&
+    hasHarvesterAssignments(slotsThere) &&
+    (JSON.stringify(slotsHere.map((s) => [s?.resource ?? null, s?.rate ?? 0])) !== JSON.stringify(slotsThere.map((s) => [s?.resource ?? null, s?.rate ?? 0])) ||
+      (there.max_harvesters != null && there.max_harvesters !== here.max_harvesters));
+  const choices = [];
+  for (const field of ["ore_choices", "item_acquisition_mode"]) {
+    const mine = here[field] || {};
+    for (const [item, value] of Object.entries(there[field] || {})) {
+      if (item in mine && mine[item] !== value && !choices.includes(item)) choices.push(item);
+    }
+  }
+  return { harvesters, choices };
+}
+
+export function mergeTransferData(current, incoming, replace = {}) {
+  const blueprints = { ...(current.blueprints || {}) };
+  const assemblyPlans = { ...(current.assemblyPlans || {}) };
+  const builds = { ...(current.builds || {}) };
+  const buildLabels = { ...(current.buildLabels || {}) };
+  const counts = { blueprints: 0, assemblyPlans: 0, builds: 0, buildsSkipped: 0, harvesters: 0, planetTypes: 0 };
+
+  // Stored entries are { requirements, ... }; blueprints saved before
+  // captain levels were stored are a bare { item: qty } dict (see storage.js).
+  const recipeOf = (entry) => (entry && entry.requirements ? entry.requirements : entry) || {};
+  const hasMaterials = (entry) => Object.values(recipeOf(entry)).some((qty) => qty > 0);
+  const mergeEntries = (target, source, field) => {
+    for (const [name, entry] of Object.entries(source || {})) {
+      const here = target[name];
+      if (!(name in target)) {
+        target[name] = entry;
+      } else if (!hasMaterials(here) && hasMaterials(entry)) {
+        const mine = here && here.requirements ? here : {};
+        const theirs = entry.requirements ? entry : { requirements: entry };
+        target[name] = { ...theirs, ...mine, requirements: theirs.requirements };
+        for (const [key, value] of Object.entries(theirs)) if (target[name][key] == null) target[name][key] = value;
+        if (theirs.store && mine.store) target[name].store = { ...theirs.store, ...Object.fromEntries(Object.entries(mine.store).filter(([, v]) => v != null)) };
+      } else {
+        continue;
+      }
+      counts[field]++;
+    }
+  };
+  mergeEntries(blueprints, incoming.blueprints, "blueprints");
+  mergeEntries(assemblyPlans, incoming.assemblyPlans, "assemblyPlans");
+
+  const buildKey = (label, entries) => JSON.stringify([label ?? null, entries]);
+  const existing = new Map(Object.entries(builds).map(([id, entries]) => [buildKey(buildLabels[id], entries), id]));
+  const idMap = {}; // incoming id -> id here
+  const incomingLabels = incoming.buildLabels || {};
+  const ids = Object.keys(incoming.builds || {}).sort((a, b) => Number(a) - Number(b));
+  for (const id of ids) {
+    const entries = incoming.builds[id];
+    const label = incomingLabels[id];
+    const key = buildKey(label, entries);
+    if (existing.has(key)) {
+      idMap[id] = existing.get(key);
+      counts.buildsSkipped++;
+      continue;
+    }
+    let newId = id;
+    if (newId in builds) {
+      let n = 1;
+      while (String(n) in builds) n++;
+      newId = String(n);
+    }
+    builds[newId] = entries;
+    if (label) buildLabels[newId] = label;
+    existing.set(key, newId);
+    idMap[id] = newId;
+    counts.builds++;
+  }
+
+  const settings = { ...(current.settings || {}) };
+  const inSettings = incoming.settings || {};
+  for (const field of ["ore_choices", "item_acquisition_mode"]) {
+    if (!inSettings[field]) continue;
+    settings[field] = replace.choices ? { ...(settings[field] || {}), ...inSettings[field] } : { ...inSettings[field], ...(settings[field] || {}) };
+  }
+  let harvesters = current.harvesters || [];
+  const incomingHarvesters = incoming.harvesters || [];
+  if ((replace.harvesters || !hasHarvesterAssignments(harvesters)) && hasHarvesterAssignments(incomingHarvesters)) {
+    harvesters = incomingHarvesters;
+    if (inSettings.max_harvesters != null) settings.max_harvesters = inSettings.max_harvesters;
+    counts.harvesters = incomingHarvesters.filter((slot) => slot && slot.resource).length;
+  }
+  const scrapedPlanetTypes = { ...(current.scrapedPlanetTypes || {}) };
+  for (const [type, entry] of Object.entries(incoming.scrapedPlanetTypes || {})) {
+    if (type in scrapedPlanetTypes) continue;
+    scrapedPlanetTypes[type] = entry;
+    counts.planetTypes++;
+  }
+
+  const pickActive = (here, there) => (here != null && here in builds ? here : (there != null && idMap[there]) || here || null);
+
+  return {
+    data: {
+      blueprints,
+      assemblyPlans,
+      builds,
+      buildLabels,
+      activeBuildName: pickActive(current.activeBuildName, incoming.activeBuildName),
+      activeCorpBuildName: pickActive(current.activeCorpBuildName, incoming.activeCorpBuildName),
+      corpHaveOverrides: { ...(incoming.corpHaveOverrides || {}), ...(current.corpHaveOverrides || {}) },
+      harvesters,
+      scrapedPlanetTypes,
+      planetSyncMeta: current.planetSyncMeta || (counts.planetTypes ? incoming.planetSyncMeta || null : null),
+      settings,
+    },
+    counts,
+  };
 }

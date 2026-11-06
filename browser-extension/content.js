@@ -40,7 +40,9 @@
 //     ...
 // confirmed via live inspection - not virtualized, all rows exist in the DOM
 // at once even when scrolled out of view.
-const STORAGE_ROW_SELECTOR = 'div[class*="cursor-pointer"][class*="bg-gray-800/30"][class*="border-gray-600/30"]';
+// No cursor-pointer: with the Ore Hold tab selected the game disables
+// withdrawals and marks every row cursor-default instead.
+const STORAGE_ROW_SELECTOR = 'div[class*="bg-gray-800/30"][class*="border-gray-600/30"]';
 const STORAGE_NAME_SELECTOR = ".font-medium.text-cyan-100.text-sm";
 const STORAGE_QTY_SELECTOR = ".text-xs.text-gray-400";
 const STORAGE_POLL_MS = 2000;
@@ -399,21 +401,40 @@ function checkResearchPlans() {
 // Module stores are titled by manufacturer ("Kriton Blueprints"), so any
 // title ending in " Blueprints" counts; their cards say "Builds: N" for the
 // build limit and "Eng Lvl N" for the Engineering needed to fit the module.
+// Some planet stores are titled by maker only ("Sabre Shield Systems") with
+// the " Blueprints" in the subtitle under it ("Mercenur - Shield
+// Blueprints"), so that counts too.
 const BLUEPRINT_STORE_TITLES = ["Blueprint Store", "Starship Blueprint Store", "Auxiliary Systems"];
 
 function isBlueprintStoreTitle(text) {
   return BLUEPRINT_STORE_TITLES.includes(text) || /\sBlueprints$/.test(text);
 }
-let lastBlueprintStoreSnapshot = null;
 
-// The open store's panel and its title ("Starship Blueprint Store"...), or
-// null - the title tells the dashboard which store a blueprint came from.
+// The category in the <p> subtitle under a store's title <h3> - "Shield"
+// from "Mercenur - Shield Blueprints", "Ship Module" from "... - Ship
+// Module Blueprints" - or null when there's no such subtitle.
+function storeCategory(h3) {
+  const subtitle = h3.nextElementSibling;
+  if (!subtitle || subtitle.tagName !== "P") return null;
+  const match = subtitle.textContent.trim().match(/(?:^|\s-\s)([^-]*?)\s+Blueprints$/);
+  return match ? match[1].trim() : null;
+}
+let lastBlueprintStoreSnapshot = null;
+// "<name>|<status>" of the last recipe notice shown, so the same open
+// blueprint isn't announced again when only the store list changes (e.g.
+// a price refresh); cleared once no blueprint is open.
+let lastRecipeNotice = null;
+
+// The open store's panel, its title ("Starship Blueprint Store"...) and
+// subtitle category ("Starship"...), or null - these tell the dashboard
+// which store a blueprint came from.
 function blueprintStorePanel() {
   for (const h3 of document.querySelectorAll("h3")) {
     // The title <h3> also holds a help button, so match on its own text.
     const title = h3.firstChild ? h3.firstChild.textContent.trim() : "";
-    if (isBlueprintStoreTitle(title)) {
-      return { panel: h3.closest("[data-panel-open]") || h3.parentElement.parentElement.parentElement, title };
+    const category = title ? storeCategory(h3) : null;
+    if (title && (isBlueprintStoreTitle(title) || category)) {
+      return { panel: h3.closest("[data-panel-open]") || h3.parentElement.parentElement.parentElement, title, category };
     }
   }
   return null;
@@ -451,7 +472,7 @@ function scrapeBlueprintStore() {
   let detail = null;
   for (const h3 of panel.querySelectorAll("h3")) {
     const name = h3.textContent.replace(/\s+/g, " ").trim();
-    if (!name || isBlueprintStoreTitle(name)) continue;
+    if (!name || name === found.title || isBlueprintStoreTitle(name)) continue;
     const block = outermostSingleH3(h3, panel);
     const reqHeading = [...block.querySelectorAll("h4")].find((h4) => /^Resource Requirements$/i.test(h4.textContent.trim()));
     if (reqHeading) {
@@ -517,20 +538,94 @@ function scrapeBlueprintStore() {
       discountPct: discount ? parseInt(discount[1], 10) : 0,
     });
   }
-  return list.length || detail ? { list, detail, storeName: found.title } : null;
+  return list.length || detail ? { list, detail, storeName: found.title, storeCategory: found.category } : null;
 }
 
 function checkBlueprintStore() {
   const scraped = scrapeBlueprintStore();
-  if (!scraped) return;
+  if (!scraped) {
+    lastRecipeNotice = null;
+    return;
+  }
   const snapshot = JSON.stringify(scraped);
   if (snapshot === lastBlueprintStoreSnapshot) return;
   // See checkCorpStore()'s comment for why this is only marked sent once
   // background.js confirms it.
   browser.runtime
-    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail, storeName: scraped.storeName })
-    .then(() => { lastBlueprintStoreSnapshot = snapshot; })
+    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail, storeName: scraped.storeName, storeCategory: scraped.storeCategory })
+    .then((result) => {
+      lastBlueprintStoreSnapshot = snapshot;
+      if (!result || !result.blueprint) {
+        if (!scraped.detail) lastRecipeNotice = null;
+        return;
+      }
+      const notice = `${result.blueprint}|${result.recipeStatus}`;
+      if (notice === lastRecipeNotice) return;
+      lastRecipeNotice = notice;
+      showToast(RECIPE_NOTICES[result.recipeStatus](result.blueprint));
+    })
     .catch(() => {});
+}
+
+// What the open blueprint's materials turned out to be against what was
+// stored - see background.js's handleBlueprintStoreScrape().
+const RECIPE_NOTICES = {
+  saved: (name) => `${name} Blueprint Saved`,
+  updated: (name) => `${name} Blueprint Updated - materials changed`,
+  verified: (name) => `${name} Blueprint up to date`,
+};
+
+// A short notice at the top of the page, e.g. "Vigilance Blueprint Saved",
+// so the player knows the blueprint they're looking at was stored. Its own
+// Shadow DOM host keeps the game's CSS off it (and it off the game's); a
+// second notice while one is showing replaces it.
+const TOAST_MS = 3000;
+let toastTimer = null;
+
+function showToast(text) {
+  let host = document.getElementById("fsc-toast-host");
+  if (!host) {
+    host = document.createElement("div");
+    host.id = "fsc-toast-host";
+    const shadow = host.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = `
+      :host { all: initial; }
+      .fsc-toast {
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        z-index: 2147483647;
+        transform: translate(-50%, -8px);
+        max-width: calc(100vw - 32px);
+        padding: 8px 16px;
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid #22d3ee;
+        border-radius: 8px;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+        font: 600 13px system-ui, -apple-system, "Segoe UI", sans-serif;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.2s, transform 0.2s;
+      }
+      .fsc-toast.fsc-visible {
+        opacity: 1;
+        transform: translate(-50%, 0);
+      }
+    `;
+    const toast = document.createElement("div");
+    toast.className = "fsc-toast";
+    shadow.append(style, toast);
+    document.documentElement.appendChild(host);
+  }
+  const toast = host.shadowRoot.querySelector(".fsc-toast");
+  toast.textContent = text;
+  // Forces a style flush so the fade-in runs even on a freshly made host.
+  void toast.offsetWidth;
+  toast.classList.add("fsc-visible");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.classList.remove("fsc-visible"), TOAST_MS);
 }
 
 // Character Skills window (the graduation-cap "Skills" button): a card per
@@ -732,6 +827,7 @@ function teardown() {
   if (watchdogIntervalId) clearInterval(watchdogIntervalId);
   document.getElementById("fsc-manifest-overlay-host")?.remove();
   document.getElementById("fsc-blueprint-modal-host")?.remove();
+  document.getElementById("fsc-toast-host")?.remove();
 }
 
 // On its own short interval rather than folded into the scrape polls above,

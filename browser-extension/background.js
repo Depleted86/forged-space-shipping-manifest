@@ -262,8 +262,9 @@ async function recalculateManifestCorpSelection() {
 // js/overlay-manifest.js) change which Blueprint or Build Order it's
 // tracking, without opening the dashboard - mirrors
 // handleSwitchManifestSelection() below exactly, just for the Corp pipeline.
+// selection null clears it (the overlay's class filter does this).
 async function handleSwitchManifestCorpSelection(selection) {
-  if (!selection || !selection.name || (selection.type !== "build" && selection.type !== "blueprint")) return;
+  if (selection !== null && (!selection || !selection.name || (selection.type !== "build" && selection.type !== "blueprint"))) return;
   await storage.saveManifestCorpSelection(selection);
   await recalculateManifestCorpSelection();
 }
@@ -392,8 +393,13 @@ function blueprintKeyFor(storeName, blueprints) {
 // {name, requirements}|null scraped from the Blueprint Store by content.js.
 // Every listed blueprint gets its ownership refreshed (added if new, with
 // no recipe); the one open in the detail panel gets its recipe replaced
-// with the store's, which is authoritative over a hand-entered one.
-async function handleBlueprintStoreScrape(list, detail, storeName) {
+// with the store's, so a saved recipe is re-checked every time it's viewed.
+// Resolves to {blueprint: name, recipeStatus} for that open blueprint -
+// "saved" (first time its materials were seen), "updated" (materials or
+// quantities differed from what was stored) or "verified" (already up to
+// date) - so content.js can tell the player; null with no detail open.
+async function handleBlueprintStoreScrape(list, detail, storeName, storeCategory) {
+  let recipeResult = null;
   const blueprints = await storage.loadBlueprints();
   for (const item of list || []) {
     if (!item || !item.name) continue;
@@ -413,14 +419,19 @@ async function handleBlueprintStoreScrape(list, detail, storeName) {
       discountPct: item.discountPct || 0,
       engReq: item.engReq ?? blueprint.store?.engReq ?? null,
       storeName: storeName || blueprint.store?.storeName || null,
+      storeCategory: storeCategory || blueprint.store?.storeCategory || null,
     };
     blueprints[key] = blueprint;
   }
   if (detail && detail.name && Object.keys(detail.requirements || {}).length > 0) {
     const key = blueprintKeyFor(detail.name, blueprints);
     const blueprint = blueprints[key] || new Blueprint(key);
+    const recipeBefore = recipeSignature(blueprint.requirements);
+    const hadRecipeBefore = blueprint.hasRecipe();
     for (const name of Object.keys(blueprint.requirements)) blueprint.setRequirement(name, 0);
     for (const [name, qty] of Object.entries(detail.requirements)) blueprint.setRequirement(name, qty);
+    const recipeStatus = !hadRecipeBefore ? "saved" : recipeSignature(blueprint.requirements) !== recipeBefore ? "updated" : "verified";
+    recipeResult = { blueprint: detail.name, recipeStatus };
     blueprint.store = {
       ...(blueprint.store || {}),
       buildCost: detail.buildCost ?? null,
@@ -428,6 +439,7 @@ async function handleBlueprintStoreScrape(list, detail, storeName) {
       mfgSkill: detail.mfgSkill ?? null,
       shipValue: detail.shipValue ?? null,
       storeName: storeName || blueprint.store?.storeName || null,
+      storeCategory: storeCategory || blueprint.store?.storeCategory || null,
     };
     if (detail.engReq != null) blueprint.store.engReq = detail.engReq;
     if (detail.buildLimit != null) blueprint.store.buildLimit = detail.buildLimit;
@@ -440,6 +452,13 @@ async function handleBlueprintStoreScrape(list, detail, storeName) {
   await recalculateActiveBuildCorpData();
   await recalculateManifestSelection();
   await recalculateManifestCorpSelection();
+  return recipeResult;
+}
+
+// Order-independent, so a recipe the store lists in a different order
+// isn't mistaken for a changed one.
+function recipeSignature(requirements) {
+  return JSON.stringify(Object.entries(requirements).sort(([a], [b]) => a.localeCompare(b)));
 }
 
 // manufacturing: the player's Manufacturing skill level, scraped from the
@@ -696,8 +715,9 @@ async function handleSetItemAcquisitionMode(itemName, mode) {
 // Lets the in-page Manifest overlay's selector dropdown (see js/overlay-
 // manifest.js) change which Blueprint or Build Order it's showing, without
 // opening the dashboard.
+// selection null clears it (the overlay's class filter does this).
 async function handleSwitchManifestSelection(selection) {
-  if (!selection || !selection.name || (selection.type !== "build" && selection.type !== "blueprint")) return;
+  if (selection !== null && (!selection || !selection.name || (selection.type !== "build" && selection.type !== "blueprint"))) return;
   await storage.saveManifestSelection(selection);
   await recalculateManifestSelection();
 }
@@ -813,7 +833,8 @@ async function handleMarkManifestSelectionComplete() {
 // next ~2s poll, but a one-off action like setting a batch count has no
 // retry, so losing it here is immediately visible. None of the callers
 // (content.js/js/overlay-manifest.js) care about the actual response value,
-// only that the message succeeded - see their own `.catch(() => {})`.
+// only that the message succeeded - see their own `.catch(() => {})` - except
+// the Blueprint Store scrape, whose "saved" notice comes from it.
 browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg) return undefined;
   let handled;
@@ -821,7 +842,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
   else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
-  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName);
+  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName, msg.storeCategory);
   else if (msg.type === "fsc-skills-scrape") handled = handleSkillsScrape(msg.manufacturing, msg.engineering, msg.captain, msg.holds);
   else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
@@ -850,13 +871,15 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // the handler finishing) - wrapped so that edge case is just silently
   // ignored rather than becoming an unhandled rejection, same as the
   // senders' own `.catch(() => {})` already treats a failed send.
-  const respond = () => { try { sendResponse(); } catch { /* sender gone, nothing to respond to */ } };
+  // Most handlers resolve to undefined; the Blueprint Store's resolves to
+  // what was saved, which content.js shows as a notice.
+  const respond = (value) => { try { sendResponse(value); } catch { /* sender gone, nothing to respond to */ } };
   // A handler failing used to be swallowed here with no trace - the page
   // then counted the scrape as delivered and never resent it, so the
   // Manifest silently went stale. Logged now (background console).
   handled.then(respond).catch((err) => {
     console.error(`Forged Space Shipping Manifest: "${msg.type}" failed.`, err);
-    respond();
+    respond(undefined);
   });
   return true;
 });

@@ -1,3 +1,6 @@
 # Packaged build artifact - built from source, not itself source
 *.xpi
 *.zip
+
+# Unpacked Chromium build from build.sh
+dist/

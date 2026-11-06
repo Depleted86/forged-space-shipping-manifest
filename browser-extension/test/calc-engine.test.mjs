@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { Catalog } from "../js/catalog.js";
-import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown } from "../js/calc-engine.js";
+import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown, mergeTransferData, transferConflicts } from "../js/calc-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(readFileSync(join(__dirname, "fixtures.json"), "utf8"));
@@ -198,4 +198,148 @@ test("R&D-only plan (no recipe yet) stays a flat need instead of expanding to no
   assert.deepEqual(expanded, { "Platinum Chips": 27 });
   assert.deepEqual(assemblyHours, {});
   assert.deepEqual(itemResourceBreakdown(catalog, "Platinum Chips", 27, { "Platinum Chips": plan }, {}), []);
+});
+
+test("mergeTransferData: into an empty browser, everything carries over", () => {
+  const incoming = {
+    blueprints: { "Defense Shield Z1": { requirements: { Kelsalt: 10 } } },
+    assemblyPlans: { "Graviton Emitter": { rate_per_hour: 2, requirements: { "Inert Gas": 5 } } },
+    builds: { 1: [["blueprint", "Defense Shield Z1", 2]], 2: [["item", "Kelsalt", 500]] },
+    buildLabels: { 2: "Outpost Run" },
+    activeBuildName: "1",
+    activeCorpBuildName: "2",
+    corpHaveOverrides: { Kelsalt: 100 },
+  };
+  const { data, counts } = mergeTransferData({}, incoming);
+  assert.deepEqual(counts, { blueprints: 1, assemblyPlans: 1, builds: 2, buildsSkipped: 0, harvesters: 0, planetTypes: 0 });
+  assert.deepEqual(data.builds, incoming.builds);
+  assert.deepEqual(data.buildLabels, { 2: "Outpost Run" });
+  assert.equal(data.activeBuildName, "1");
+  assert.equal(data.activeCorpBuildName, "2");
+  assert.deepEqual(data.corpHaveOverrides, { Kelsalt: 100 });
+});
+
+test("mergeTransferData: keeps what's here, renumbers clashing builds, skips duplicates", () => {
+  const current = {
+    blueprints: { "Defense Shield Z1": { requirements: { Kelsalt: 12 } } },
+    builds: { 1: [["item", "Jasper Ore", 50]], 2: [["item", "Kelsalt", 500]] },
+    buildLabels: { 2: "Outpost Run" },
+    activeBuildName: "1",
+    activeCorpBuildName: null,
+    corpHaveOverrides: { Kelsalt: 7 },
+  };
+  const incoming = {
+    blueprints: { "Defense Shield Z1": { requirements: { Kelsalt: 10 } }, "Civilian Basic Shield Generator": { requirements: { Kelsalt: 3 } } },
+    builds: { 1: [["blueprint", "Defense Shield Z1", 2]], 3: [["item", "Kelsalt", 500]] },
+    buildLabels: { 1: "Shields", 3: "Outpost Run" },
+    activeBuildName: "3",
+    activeCorpBuildName: "1",
+    corpHaveOverrides: { Kelsalt: 100, "Inert Gas": 4 },
+  };
+  const { data, counts } = mergeTransferData(current, incoming);
+  assert.deepEqual(counts, { blueprints: 1, assemblyPlans: 0, builds: 1, buildsSkipped: 1, harvesters: 0, planetTypes: 0 });
+  assert.deepEqual(data.blueprints["Defense Shield Z1"], { requirements: { Kelsalt: 12 } });
+  assert.ok(data.blueprints["Civilian Basic Shield Generator"]);
+  // Incoming build 1 clashes with the one here, so it lands on the lowest free id.
+  assert.deepEqual(data.builds["3"], [["blueprint", "Defense Shield Z1", 2]]);
+  assert.equal(data.buildLabels["3"], "Shields");
+  assert.equal(Object.keys(data.builds).length, 3);
+  assert.equal(data.activeBuildName, "1");
+  assert.equal(data.activeCorpBuildName, "3");
+  assert.deepEqual(data.corpHaveOverrides, { Kelsalt: 7, "Inert Gas": 4 });
+  // Importing the same file again adds nothing.
+  const again = mergeTransferData(data, incoming);
+  assert.deepEqual(again.counts, { blueprints: 0, assemblyPlans: 0, builds: 0, buildsSkipped: 2, harvesters: 0, planetTypes: 0 });
+});
+
+test("mergeTransferData: harvester roster, planet types and hand-set settings", () => {
+  const incoming = {
+    harvesters: [{ resource: "Zephyr Flux", rate: 40 }, { resource: null, rate: 0 }, { resource: "Terraglass", rate: 30 }],
+    scrapedPlanetTypes: { Ice: { resources: ["Glacite Ore"] }, Lava: { resources: ["Magmite"] } },
+    planetSyncMeta: { syncedAt: "2026-11-01T00:00:00Z", count: 2 },
+    settings: { max_harvesters: 3, ore_choices: { "Kallycite Ore": "Nylonite", Iron: "Hematite" }, item_acquisition_mode: { Gears: "buy" }, cargo_capacity: 999 },
+  };
+  // A fresh browser: empty roster of 4, one planet type already read, its own ore choice and cargo.
+  const current = {
+    harvesters: [{ resource: null, rate: 0 }, { resource: null, rate: 0 }, { resource: null, rate: 0 }, { resource: null, rate: 0 }],
+    scrapedPlanetTypes: { Ice: { resources: ["Glacite Ore", "Frostite"] } },
+    settings: { max_harvesters: 4, ore_choices: { Iron: "Magnetite" }, cargo_capacity: 60 },
+  };
+  const { data, counts } = mergeTransferData(current, incoming);
+  assert.equal(counts.harvesters, 2);
+  assert.equal(counts.planetTypes, 1);
+  assert.deepEqual(data.harvesters, incoming.harvesters);
+  assert.equal(data.settings.max_harvesters, 3);
+  assert.equal(data.settings.cargo_capacity, 60);
+  assert.deepEqual(data.settings.ore_choices, { "Kallycite Ore": "Nylonite", Iron: "Magnetite" });
+  assert.deepEqual(data.settings.item_acquisition_mode, { Gears: "buy" });
+  assert.deepEqual(data.scrapedPlanetTypes.Ice, { resources: ["Glacite Ore", "Frostite"] });
+  assert.ok(data.scrapedPlanetTypes.Lava);
+  assert.deepEqual(data.planetSyncMeta, incoming.planetSyncMeta);
+  // A roster already in use here is left alone.
+  const kept = mergeTransferData({ harvesters: [{ resource: "White Iron", rate: 40 }], settings: { max_harvesters: 1 } }, incoming);
+  assert.equal(kept.counts.harvesters, 0);
+  assert.deepEqual(kept.data.harvesters, [{ resource: "White Iron", rate: 40 }]);
+  assert.equal(kept.data.settings.max_harvesters, 1);
+});
+
+test("transferConflicts + replace: harvester roster and ore/buy choices", () => {
+  const current = {
+    harvesters: [{ resource: "White Iron", rate: 40 }, { resource: null, rate: 0 }],
+    settings: { max_harvesters: 2, ore_choices: { Iron: "Magnetite", Copper: "Malachite" }, item_acquisition_mode: { Gears: "craft" } },
+  };
+  const incoming = {
+    harvesters: [{ resource: "Zephyr Flux", rate: 40 }, { resource: "Terraglass", rate: 30 }, { resource: null, rate: 0 }],
+    settings: { max_harvesters: 3, ore_choices: { Iron: "Hematite", Copper: "Malachite", Tin: "Cassiterite" }, item_acquisition_mode: { Gears: "buy" } },
+  };
+  assert.deepEqual(transferConflicts(current, incoming), { harvesters: true, choices: ["Iron", "Gears"] });
+  // Same roster and choices: nothing to ask.
+  assert.deepEqual(transferConflicts(current, current), { harvesters: false, choices: [] });
+  // Empty roster here: no question, the file's is just used.
+  assert.equal(transferConflicts({ harvesters: [], settings: {} }, incoming).harvesters, false);
+
+  const skipped = mergeTransferData(current, incoming).data;
+  assert.deepEqual(skipped.harvesters, current.harvesters);
+  assert.equal(skipped.settings.max_harvesters, 2);
+  assert.deepEqual(skipped.settings.ore_choices, { Iron: "Magnetite", Copper: "Malachite", Tin: "Cassiterite" });
+  assert.equal(skipped.settings.item_acquisition_mode.Gears, "craft");
+
+  const allowed = mergeTransferData(current, incoming, { harvesters: true, choices: true });
+  assert.deepEqual(allowed.data.harvesters, incoming.harvesters);
+  assert.equal(allowed.data.settings.max_harvesters, 3);
+  assert.equal(allowed.counts.harvesters, 2);
+  assert.deepEqual(allowed.data.settings.ore_choices, { Iron: "Hematite", Copper: "Malachite", Tin: "Cassiterite" });
+  assert.equal(allowed.data.settings.item_acquisition_mode.Gears, "buy");
+});
+
+test("mergeTransferData: fills materials for blueprints only seen in a store list", () => {
+  const current = {
+    blueprints: {
+      "Antimatter Chamber": { requirements: {}, captain_level: null, store: { storeName: "Blueprint Store", owned: true, price: 900, buildCost: null } },
+      Hawk: { requirements: { Iron: 12 }, captain_level: 5, store: { storeName: "Starship Blueprint Store" } },
+    },
+    assemblyPlans: { "Circuit Boards": { rate_per_hour: 5, requirements: {}, captain_level: null, research: null } },
+  };
+  const incoming = {
+    blueprints: {
+      "Antimatter Chamber": { requirements: { Kelsalt: 40, "Inert Gas": 10 }, captain_level: 12, store: { storeName: "Blueprint Store", owned: false, price: 1000, buildCost: 5000 } },
+      Hawk: { requirements: { Iron: 10 }, captain_level: 5, store: {} },
+      Legacy: { Copper: 3 },
+    },
+    assemblyPlans: { "Circuit Boards": { rate_per_hour: 5, requirements: { Copper: 2 }, captain_level: 3, research: null } },
+  };
+  const { data, counts } = mergeTransferData(current, incoming);
+  assert.equal(counts.blueprints, 2);
+  assert.equal(counts.assemblyPlans, 1);
+  const ac = data.blueprints["Antimatter Chamber"];
+  assert.deepEqual(ac.requirements, { Kelsalt: 40, "Inert Gas": 10 });
+  assert.equal(ac.captain_level, 12);
+  // This browser's live store info wins; gaps are filled from the file.
+  assert.equal(ac.store.owned, true);
+  assert.equal(ac.store.price, 900);
+  assert.equal(ac.store.buildCost, 5000);
+  assert.deepEqual(data.blueprints.Hawk.requirements, { Iron: 12 });
+  assert.deepEqual(data.blueprints.Legacy, { Copper: 3 });
+  assert.deepEqual(data.assemblyPlans["Circuit Boards"].requirements, { Copper: 2 });
+  assert.equal(data.assemblyPlans["Circuit Boards"].captain_level, 3);
 });

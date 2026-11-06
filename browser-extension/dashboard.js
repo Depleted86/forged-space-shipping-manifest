@@ -29,7 +29,6 @@ export function kindLabel(catalog, name) {
 
 const app = {
   catalog: null,
-  isFirstLaunch: false,
   blueprints: {},
   inventory: null,
   settings: null,
@@ -66,12 +65,6 @@ async function bootstrap() {
   // Lexicon on top of the static baseline - see catalog.js's
   // applyScrapedPlanetTypes() comment.
   app.catalog.applyScrapedPlanetTypes(await storage.loadScrapedPlanetTypes());
-  // Checked (and immediately marked done) before anything else loads, so a
-  // brand-new install lands on Settings instead of Ore Database - see
-  // storage.js's loadDashboardOnboarded() comment for why this isn't done
-  // via browser.runtime.onInstalled.
-  app.isFirstLaunch = !(await storage.loadDashboardOnboarded());
-  if (app.isFirstLaunch) await storage.saveDashboardOnboarded();
   app.settings = await storage.loadSettings();
   app.maxHarvesters = Number(app.settings.max_harvesters || 4);
   app.blueprints = await storage.loadBlueprints();
@@ -95,7 +88,7 @@ async function bootstrap() {
   initSettingsTab(app, document.getElementById("tab-settings"));
   initAboutTab(app, document.getElementById("tab-about"));
 
-  setupTabSwitching(app.isFirstLaunch ? "settings" : "ore-database");
+  setupTabSwitching("ore-database");
 
   // Cross-tab / cross-context reactivity: if background.js (or another
   // dashboard tab) writes inventory/blueprints/assemblyPlans/builds while
@@ -135,7 +128,7 @@ async function bootstrap() {
         // Both the Blueprints tab's own list AND Plan a Build's "add a
         // blueprint" dropdown need this - otherwise a blueprint added
         // anywhere other than this exact dashboard tab's own Blueprints tab
-        // (the in-page Add Blueprint modal on the game page, or a second
+        // (the in-page Add to Build modal on the game page, or a second
         // dashboard tab) never shows up in Plan a Build here until manually
         // switching tabs or reloading.
         if (app.refreshHooks.blueprints) app.refreshHooks.blueprints();
@@ -166,6 +159,14 @@ async function bootstrap() {
       storage.loadSettings().then((settings) => {
         app.settings = settings;
         app.maxHarvesters = Number(settings.max_harvesters || app.maxHarvesters);
+        // A different slot count also needs the roster resized, or the
+        // Planets tab keeps showing the old number of rows.
+        if (app.harvesterSlots.length !== app.maxHarvesters) {
+          storage.loadHarvesterSlots(app.maxHarvesters).then((slots) => {
+            app.harvesterSlots = slots;
+            if (app.refreshHooks.planets) app.refreshHooks.planets();
+          });
+        }
         if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
         if (app.refreshHooks.blueprintsSkill) app.refreshHooks.blueprintsSkill();
         if (app.refreshHooks.settingsFields) app.refreshHooks.settingsFields();
