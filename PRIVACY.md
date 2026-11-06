@@ -1,6 +1,6 @@
 # Privacy Policy — Forged Space Shipping Manifest
 
-_Last updated: 2026-08-15_
+_Last updated: 2026-11-05_
 
 Forged Space Shipping Manifest is a browser extension for the game
 [Forged Space](https://forgedspace.com), developed with explicit
@@ -17,18 +17,20 @@ it does happens locally, inside your own browser.
 ## What data the extension accesses
 
 - **Forged Space game data**: while you're on forgedspace.com, the
-  extension reads the page you're currently viewing — specifically your
-  storage inventory listing — to keep its own local ore/inventory
-  tracking in sync with what's actually in your in-game storage. It does
-  not read any other part of the page, and it never interacts with the
+  extension reads the game screens you open to keep its own local planning
+  data in sync: your Commercial Storage listing, the Corp Store, the
+  blueprint stores, the Assembly Facility and R&D Office plan lists, the
+  Character Skills window, the planet reference in the Systems Lexicon,
+  and your Captain level and cargo/Ore Hold sizes from the game's top bar.
+  It only reads what those screens show. It never interacts with the
   game's own interface: it does not click anything, fill in a form, or
-  take any action in the game on your behalf. It does add one piece of its
-  own UI directly onto the page - a small floating "Manifest" overlay
-  showing your synced data - but that's a separate, self-contained element
-  the extension draws and controls itself; it doesn't read from, write to,
-  or change the game's own page content in any way.
-- **Your own extension data**: blueprints, inventory snapshots, saved
-  builds, and settings that you enter into the extension yourself.
+  take any action in the game on your behalf. It adds its own UI to the
+  page - a floating "Manifest" overlay and short notices when a blueprint
+  is saved - but those are separate, self-contained elements the
+  extension draws and controls itself; they don't write to or change the
+  game's own page content in any way.
+- **Your own extension data**: saved builds, harvester assignments, corp
+  plans and choices that you enter into the extension yourself.
 
 ## What the extension does NOT do
 
@@ -50,12 +52,17 @@ shared with anyone - including the developer of this extension.
 Uninstalling the extension, or clearing its storage from your browser's
 extension settings, removes this data completely.
 
+The Settings tab can export your blueprints, builds and harvester setup to
+a file, and the Corp tab can export a CSV. These files are only created
+when you click Export, are saved by your browser to your own computer, and
+are never sent anywhere. Importing a file only reads the file you pick.
+
 ## Permissions this extension requests, and why
 
 - **`storage`** — used only to save the data described above locally in
   your browser.
 - **Access to `forgedspace.com`** — used only so the extension's content
-  script can read the storage screen on that page, as described above.
+  script can read the game screens described above.
   It is not used to make requests to that site or anywhere else.
 
 ## Changes to this policy

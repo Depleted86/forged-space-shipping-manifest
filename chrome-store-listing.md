@@ -1,7 +1,11 @@
-# Chrome Web Store Listing — Forged Space Shipping Manifest
+# Chrome Web Store / Edge Add-ons Listing — Forged Space Shipping Manifest
 
-Copy/paste source for the Developer Dashboard listing form. Not part of the
-shipped extension - keep this out of the packaged zip.
+Copy/paste source for the Chrome Developer Dashboard and Microsoft Partner
+Center (Edge Add-ons) listing forms - both ask for the same fields. Upload
+`forged-space-shipping-manifest-chrome-<ver>.zip` to Chrome and
+`forged-space-shipping-manifest-edge-<ver>.zip` to Edge (both from
+`build.sh`). Not part of the shipped extension - keep this out of the
+packaged zip.
 
 ## Short description (≤132 characters)
 
@@ -17,19 +21,23 @@ then build a full mining-to-launch plan. An in-game "Manifest" overlay
 shows exactly what's left to gather, live-synced to your in-game storage -
 no more juggling a spreadsheet or a separate desktop app.
 
+Blueprints, assembly plans, skills and ship capacities are read from the
+game screens as you open them, so there's nothing to type in by hand.
+
 For corp orders, the Corp tab tracks a shared build against the corp's
 Store, with an editable "have" figure any corp-mate can correct for
 everyone else and a CSV export/import so players who'd rather work from a
-spreadsheet can too.
+spreadsheet can too. Your blueprints, builds and harvester setup can be
+exported to a file and imported on another browser or PC.
 
 This extension is strictly read-only and makes no network requests of any
-kind. It only reads the storage screen you're already looking at on
-forgedspace.com - it never clicks, submits, or automates anything in the
-game on your behalf. Its one piece of on-page UI (the Manifest overlay) is
-a separate, self-contained element it draws and controls itself; it never
-reads from or modifies the game's own page content. Everything it stores
-(blueprints, inventory, builds, settings) stays local to your own browser and
-is never transmitted anywhere.
+kind. It only reads the game screens you open on forgedspace.com - it
+never clicks, submits, or automates anything in the game on your behalf.
+Its on-page UI (the Manifest overlay and short blueprint notices) is
+separate, self-contained elements it draws and controls itself; it never
+modifies the game's own page content. Everything it stores (blueprints,
+inventory, builds, settings) stays local to your own browser and is never
+transmitted anywhere.
 
 Full source code is public so anyone can verify the above for themselves:
 https://github.com/Depleted86/forged-space-shipping-manifest
@@ -56,9 +64,10 @@ builds, corp order data, and settings locally in the browser, so their
 planning data persists between sessions.
 
 **Host permission: https://forgedspace.com/***
-Used only so the extension's content script can read the storage/inventory
-listing on forgedspace.com to keep the extension's local tracking in sync,
-and to render its own separate in-page Manifest overlay. It never submits
+Used only so the extension's content script can read the game screens the
+player opens on forgedspace.com (storage, stores, assembly and research
+plans, skills) to keep the extension's local tracking in sync, and to
+render its own separate in-page Manifest overlay. It never submits
 or modifies anything on the page itself.
 
 ## Privacy policy URL

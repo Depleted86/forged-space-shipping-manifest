@@ -2,6 +2,32 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 4.1 (prepared 2026-11-05)
+
+### Release notes (public)
+
+- **Move to another browser or PC.** Settings has a new Export to File / Import from File for your blueprints, assembly plans, builds (personal and corp), harvester slots, planet types and ore/buy choices. Importing adds to what's already there. Blueprints that were only seen in a store list get the file's materials. If the file would change your harvester settings or ore/buy choices, you're asked to Allow or Skip first.
+- **Blueprint notices.** Viewing a blueprint in a store now shows a short notice: "Blueprint Saved" the first time, "Blueprint Updated - materials changed" if the game's recipe changed, or "Blueprint up to date".
+- **More stores are read.** Stores named after their maker, like Sabre Shield Systems, are now recognised from the "... Shield Blueprints" line under their title. Blueprints are grouped by that store category, with a new Shields group, and any new category the game adds gets its own group.
+- **Values the game supplies are no longer typed in by hand.** Cargo, Ore Hold and skills show as read from the game. The Blueprints and Assembly tabs are now viewers for what the game recorded (with Delete), and the overlay's blueprint editor is replaced by "Add to Build". A blueprint without materials yet tells you which store to view it in.
+- **Harvester slots** are now set on the Planets tab (1-10, the game's maximum), next to the roster they size.
+- Fixed: transferring ore on the Ore Hold tab of Commercial Storage now updates trip counts. Changing the ship class filter resets the blueprint picker.
+- Also available for Chrome and Edge.
+
+### Notes for reviewers (private)
+
+Update to a previously-submitted extension (v4.0, submitted 2026-10-31). No permission changes: still just `storage` and the single host permission for `https://forgedspace.com/*`. Still no network requests of any kind; all data stays in `browser.storage.local`.
+
+**Worth a direct look:**
+
+- **Store detection (`content.js`, `blueprintStorePanel()` / `storeCategory()`).** Blueprint stores were recognised by title only. A store is now also recognised by the `<p>` subtitle under its title (e.g. "Mercenur - Shield Blueprints"), because some stores are titled by maker ("Sabre Shield Systems"). The category from that subtitle is stored with each blueprint for grouping. Same read-only pattern as the existing scrapers: `querySelectorAll`/`textContent` only, no `.click()`, `.dispatchEvent()`, value assignment or other page mutation.
+- **New in-page notice (`content.js`, `showToast()`).** A short text notice shown for 3 seconds when a blueprint's recipe is saved, updated or confirmed. It lives in its own Shadow DOM host (`#fsc-toast-host`), separate from the game's DOM, like the existing Manifest overlay. Text is set with `textContent`.
+- **File export/import (dashboard Settings tab, `js/tab-settings.js`; merge logic in `js/calc-engine.js` `mergeTransferData()`).** Export builds a JSON `Blob` and clicks an `<a download>` - no `downloads` permission. Import reads a user-picked file from `<input type="file">` with `File.text()` and `JSON.parse()`; nothing from it is evaluated or inserted as HTML, only known keys are merged into `browser.storage.local`. The Allow/Skip prompt is a plain dashboard modal.
+
+Also removed: the hand-entry inputs for game-supplied values, the blueprint editor, and the first-launch onboarding (its `dashboardOnboarded` storage key is no longer read or written).
+
+**Re: the "Unsupported /background/service_worker manifest property is ignored by Firefox" warning**, if it appears again: expected and unchanged since v3.1 (`manifest.json` declares both `service_worker` and `scripts` so one manifest works on Chrome/Edge and Firefox). The Chrome/Edge packages from `build.sh` drop `scripts` and `browser_specific_settings`.
+
 ## 4.0 (submitted 2026-10-31)
 
 ### Release notes (public)

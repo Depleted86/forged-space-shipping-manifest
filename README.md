@@ -56,14 +56,18 @@ Pull Request describing what changed is genuinely useful (see below).
 
 ## Installing
 
-This isn't (yet) published to any extension store. To load it locally:
+To load it locally:
 
 - **Firefox**: go to `about:debugging#/runtime/this-firefox`, click "Load
   Temporary Add-on…", and select `browser-extension/manifest.json`. This
   is a temporary load and won't survive a browser restart.
-- **Chrome/Edge**: go to `chrome://extensions` (or `edge://extensions`),
-  enable Developer Mode, click "Load unpacked", and select the
-  `browser-extension/` folder.
+- **Chrome/Edge**: run `./build.sh`, then go to `chrome://extensions` (or
+  `edge://extensions`), enable Developer Mode, click "Load unpacked", and
+  select the `dist/chromium/` folder.
+
+`./build.sh` also builds the store packages: the Firefox zip and the
+Chrome and Edge zips (same contents, with the Firefox-only manifest keys
+removed).
 
 ## Contributing
 
