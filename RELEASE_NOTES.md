@@ -2,6 +2,23 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 4.1.1 (prepared 2026-11-06)
+
+### Release notes (public)
+
+- **Fixed: Commercial Storage stopped syncing.** The game rebuilt its Commercial Storage window, and the extension now reads the new one. Searching or filtering the list still never zeroes out items that are hidden.
+- **You're told when a screen can't be read.** If the game changes a screen the extension reads (storage, blueprint stores, Assembly Facility, R&D, Character Skills, Lexicon) so that nothing can be read from it, a short notice says so, instead of the sync silently stopping. Your saved data isn't touched.
+- Storage is now read by the labels and text the game shows rather than its styling, so it should survive future restyles.
+
+### Notes for reviewers (private)
+
+Supersedes 4.1 (submitted 2026-11-05, still in review); everything in its notes still applies. No permission changes: still just `storage` and the single host permission for `https://forgedspace.com/*`. Still no network requests of any kind; all data stays in `browser.storage.local`.
+
+**Changes, all in `content.js`:**
+
+- **New Commercial Storage reader (`scrapeStoragePanel()`).** The game replaced its storage window. The new reader finds the list by its `role="listbox"` / `aria-label`, and reads each item's name and "N units" text with `querySelectorAll`, `textContent` and `getAttribute("aria-label")` only. Same read-only pattern as the existing scrapers: no `.click()`, `.dispatchEvent()`, value assignment or other page mutation. The old readers stay as fallbacks.
+- **"Can't read this screen" notice (`reportScreenRead()`).** When a screen's title is on the page but nothing could be read from it for two polls, a text notice is shown for 8 seconds. It reuses the existing Shadow DOM notice host (`#fsc-toast-host`) from 4.1, with text set via `textContent`, and logs one `console.warn`.
+
 ## 4.1 (submitted to AMO and Edge Add-ons 2026-11-05)
 
 ### Release notes (public)

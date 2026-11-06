@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Forged Space Shipping Manifest",
-  "version": "4.1",
+  "version": "4.1.1",
   "description": "Mining, refining, and assembly planner for Forged Space, with an in-game Manifest overlay and corp order tracking.",
   "permissions": [
     "storage"

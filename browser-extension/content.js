@@ -91,6 +91,90 @@ function scrapeStorageRows() {
   return { items, complete: !!column && items.length > 0 && storageListIsComplete(column, items.length) };
 }
 
+// Commercial Storage as rebuilt by the game on 2026-11-06: one panel
+// (".fsx.sto", titled "Commercial Storage") with the ship's cargo hold in its
+// left column and storage as a list of tiles in the middle -
+//   <div class="tile" role="option">
+//     <button class="tick" aria-label="Pick Abaron to withdraw"></button>
+//     ...<div class="nm"><i></i>Abaron</div>...
+//     <div class="q">41,374 units</div>
+// grouped under Ore / Refined / Planet resources / Solar gases / Items
+// headings. Only tiles inside the storage list are read, so cargo-hold rows
+// (".srow") never count as stored. The list is complete when the search box
+// is empty, the "Show" filter is on "All N" and all N tiles were read.
+//
+// Read by what the game shows and labels for screen readers - the list's
+// "Your storage" name, each tile's "N units" text and its "Pick <name> to
+// withdraw" checkbox - before its style classes, which a restyle is far more
+// likely to rename. The classes are only a fallback.
+const STORAGE_PANEL_TITLE = "Commercial Storage";
+const STORAGE_UNITS_TEXT = /^([\d,.]+)\s+units?$/i;
+
+function storageList() {
+  const labelled = document.querySelector('[role="listbox"][aria-label="Your storage"]');
+  if (labelled) return labelled;
+  for (const panel of document.querySelectorAll(".fsx.sto")) {
+    const title = panel.querySelector(".ttl");
+    if (title && title.textContent.trim() === STORAGE_PANEL_TITLE) return panel.querySelector('[role="listbox"]') || panel.querySelector(".list");
+  }
+  return null;
+}
+
+function storageTileName(tile) {
+  const nameEl = tile.querySelector(".nm");
+  if (nameEl && nameEl.textContent.trim()) return nameEl.textContent.trim();
+  for (const el of tile.querySelectorAll("[aria-label]")) {
+    const pick = el.getAttribute("aria-label").match(/^Pick (.+) to withdraw$/);
+    if (pick) return pick[1].trim();
+  }
+  return null;
+}
+
+function storageTileQuantity(tile) {
+  for (const el of tile.querySelectorAll("*")) {
+    if (el.children.length > 0) continue;
+    const units = el.textContent.trim().match(STORAGE_UNITS_TEXT);
+    if (units) return parseFloat(units[1].replace(/,/g, ""));
+  }
+  return null;
+}
+
+// How many kinds the whole storage holds: the "Show" filter's "All N"
+// button, or the header's "N kinds" chip. null when the filter is on
+// something other than All (the list is a subset) or neither is found.
+function storageTotalKinds(panel) {
+  const show = panel.querySelector('[role="group"][aria-label="Show"]');
+  if (show) {
+    const pressed = show.querySelector('button[aria-pressed="true"]');
+    const all = pressed && pressed.textContent.trim().match(/^All ([\d,]+)$/);
+    return all ? parseInt(all[1].replace(/,/g, ""), 10) : null;
+  }
+  for (const el of panel.querySelectorAll("span, div")) {
+    const kinds = el.textContent.trim().match(/^([\d,]+) kinds$/);
+    if (kinds) return parseInt(kinds[1].replace(/,/g, ""), 10);
+  }
+  return null;
+}
+
+function scrapeStoragePanel() {
+  const list = storageList();
+  if (!list) return { items: [], complete: false };
+  let tiles = list.querySelectorAll('[role="option"]');
+  if (tiles.length === 0) tiles = list.querySelectorAll(".tile");
+  const items = [];
+  tiles.forEach((tile) => {
+    const name = storageTileName(tile);
+    const quantity = storageTileQuantity(tile);
+    if (!name || quantity === null || Number.isNaN(quantity)) return;
+    items.push({ name, quantity });
+  });
+  const panel = list.closest("[data-panel-open]") || list.closest(".fsx") || document;
+  const search = panel.querySelector('input[type="search"]');
+  const searching = !!search && search.value.trim() !== "";
+  const complete = items.length > 0 && !searching && storageTotalKinds(panel) === items.length;
+  return { items, complete };
+}
+
 // Offices > Store screen: two side-by-side panels - "Your Commercial
 // Storage" and "Corp Store" - share IDENTICAL row markup/classes (an indigo
 // theme, different from the gray/cyan storage-transfer screen above), so row
@@ -179,19 +263,30 @@ function checkCorpStore() {
 // storage.local write in background.js) when the scraped snapshot actually
 // changed since the last tick, so leaving the storage screen open and idle
 // doesn't write every 2s.
+// The storage screen is on the page, by its title, and shows quantities
+// ("N units") - an empty storage shows none, so it never reads as unreadable.
+function storageScreenOpen() {
+  const title = findLeafText("h1, h2, h3, h4, div", STORAGE_PANEL_TITLE);
+  if (!title) return false;
+  const panel = title.closest("[data-panel-open]") || title.parentElement?.parentElement?.parentElement;
+  return !!panel && /\d\s+units?\b/i.test(panel.textContent);
+}
+
 function checkStorage() {
-  // Personal storage shows up on two different screens with entirely
-  // different markup - the ship-cargo-transfer screen (gray/cyan) and the
-  // Offices > Store screen's "Your Commercial Storage" panel (indigo). Only
-  // one is ever open/rendered at a time, so try the ship-cargo one first and
-  // fall back to the Offices panel - either way the result feeds the same
-  // fsc-storage-scrape pipeline, so personal inventory updates identically
-  // no matter which one the player happens to have open.
-  const docking = scrapeStorageRows();
+  // Personal storage shows up on different screens with entirely different
+  // markup - the Commercial Storage panel (tiles, current), the older
+  // ship-cargo-transfer screen (gray/cyan) and the Offices > Store screen's
+  // "Your Commercial Storage" panel (indigo). Only one is ever open/rendered
+  // at a time, so try them in that order - either way the result feeds the
+  // same fsc-storage-scrape pipeline, so personal inventory updates
+  // identically no matter which one the player happens to have open.
+  const panel = scrapeStoragePanel();
+  const docking = panel.items.length > 0 ? panel : scrapeStorageRows();
   // The Offices panel has no way to tell a filtered list from a full one,
   // so it's always merged.
   const items = docking.items.length > 0 ? docking.items : scrapeCommercialStoragePanelRows();
   const complete = docking.items.length > 0 && docking.complete;
+  reportScreenRead("Commercial Storage", items.length === 0 && storageScreenOpen(), items.length > 0);
   if (items.length === 0) {
     // Screen closed - forget what was last sent, so reopening it always
     // resyncs (the stored inventory may have changed meanwhile, e.g. from
@@ -307,8 +402,13 @@ function scrapeAssemblerCards() {
 }
 
 function checkAssemblerPlans() {
-  if (!isAssemblyFacilityOpen()) return;
+  if (!isAssemblyFacilityOpen()) {
+    reportScreenRead("the Assembly Facility's plans", false, false);
+    return;
+  }
   const items = scrapeAssemblerCards();
+  // The Facility has other tabs; only its Configure Production list shows plans.
+  reportScreenRead("the Assembly Facility's plans", !!findLeafText("h2, h3, h4", "Configure Production"), items.length > 0);
   if (items.length === 0) return;
   const snapshot = JSON.stringify(items);
   if (snapshot === lastAssemblerSnapshot) return;
@@ -376,6 +476,7 @@ function scrapeResearchPlans() {
 
 function checkResearchPlans() {
   const plans = scrapeResearchPlans();
+  reportScreenRead("the R&D research plans", plans.length === 0 && !!researchPanel(), plans.length > 0);
   if (plans.length === 0) return;
   const snapshot = JSON.stringify(plans);
   if (snapshot === lastResearchSnapshot) return;
@@ -538,11 +639,22 @@ function scrapeBlueprintStore() {
       discountPct: discount ? parseInt(discount[1], 10) : 0,
     });
   }
-  return list.length || detail ? { list, detail, storeName: found.title, storeCategory: found.category } : null;
+  // Whether an open blueprint's materials heading is on screen at all, so
+  // materials that stop reading are noticed (see blueprintStoreReadOk()).
+  const materialsShown = leafTexts(panel).some((t) => /^Resource Requirements$/i.test(t));
+  return list.length || detail ? { list, detail, storeName: found.title, storeCategory: found.category, materialsShown } : null;
+}
+
+// Read when its cards were, and - with a blueprint's materials on screen -
+// those materials too.
+function blueprintStoreReadOk(scraped) {
+  if (!scraped || scraped.list.length === 0) return false;
+  return !scraped.materialsShown || (!!scraped.detail && Object.keys(scraped.detail.requirements).length > 0);
 }
 
 function checkBlueprintStore() {
   const scraped = scrapeBlueprintStore();
+  reportScreenRead("this blueprint store", !!scraped || !!blueprintStorePanel(), blueprintStoreReadOk(scraped));
   if (!scraped) {
     lastRecipeNotice = null;
     return;
@@ -582,7 +694,7 @@ const RECIPE_NOTICES = {
 const TOAST_MS = 3000;
 let toastTimer = null;
 
-function showToast(text) {
+function showToast(text, durationMs = TOAST_MS) {
   let host = document.getElementById("fsc-toast-host");
   if (!host) {
     host = document.createElement("div");
@@ -625,7 +737,41 @@ function showToast(text) {
   void toast.offsetWidth;
   toast.classList.add("fsc-visible");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toast.classList.remove("fsc-visible"), TOAST_MS);
+  toastTimer = setTimeout(() => toast.classList.remove("fsc-visible"), durationMs);
+}
+
+// "Can't read this screen" notices. Every reader above finds its screen by
+// title text, which a redesign rarely changes, and then reads the contents
+// by layout, which it often does. So a screen whose title is on the page
+// while nothing could be read from it has most likely been redesigned, and
+// the player is told instead of the sync just going quiet. Only after
+// UNREADABLE_POLLS polls in a row, so a screen still loading its contents
+// doesn't trip it, and only once until that screen closes or reads again.
+const UNREADABLE_POLLS = 2;
+const UNREADABLE_NOTICE_MS = 8000;
+const unreadablePolls = new Map();
+const unreadableNoticeShown = new Set();
+
+function reportScreenRead(screen, open, readOk) {
+  if (!open || readOk) {
+    unreadablePolls.delete(screen);
+    unreadableNoticeShown.delete(screen);
+    return;
+  }
+  const polls = (unreadablePolls.get(screen) || 0) + 1;
+  unreadablePolls.set(screen, polls);
+  if (polls < UNREADABLE_POLLS || unreadableNoticeShown.has(screen)) return;
+  unreadableNoticeShown.add(screen);
+  console.warn(`[Forged Space Shipping Manifest] ${screen} is open but nothing could be read from it.`);
+  showToast(`Shipping Manifest can't read ${screen} - the game may have changed this screen. Your saved data is unchanged.`, UNREADABLE_NOTICE_MS);
+}
+
+// A leaf element (no child elements) whose text is exactly `text`.
+function findLeafText(selector, text) {
+  for (const el of document.querySelectorAll(selector)) {
+    if (el.childElementCount === 0 && el.textContent.trim() === text) return el;
+  }
+  return null;
 }
 
 // Character Skills window (the graduation-cap "Skills" button): a card per
@@ -684,6 +830,13 @@ function checkSkills() {
   const engineering = scrapeSkillLevel("Engineering");
   const captain = scrapeCaptainLevel();
   const holds = scrapeShipHolds();
+  // Manufacturing and Engineering are on the Ship Skills tab only, so the
+  // window counts as read when any skill card on the open tab reads the same
+  // way (a name with "Level N" beside it).
+  const skillsWindowOpen = !!findLeafText("h2", SKILLS_PANEL_TITLE);
+  const skillsRead =
+    manufacturing !== null || engineering !== null || [...document.querySelectorAll("h4")].some((h4) => /Level\s*\d+/i.test(h4.parentElement.textContent || ""));
+  reportScreenRead("Character Skills", skillsWindowOpen, skillsRead);
   if (manufacturing === null && engineering === null && captain === null && holds === null) return;
   const snapshot = JSON.stringify([manufacturing, engineering, captain, holds]);
   if (snapshot === lastSkillsSnapshot) return;
@@ -762,6 +915,7 @@ function scrapeLexiconPlanetTypes() {
 
 function checkLexiconPlanets() {
   const items = scrapeLexiconPlanetTypes();
+  reportScreenRead("the Lexicon's planet types", items.length === 0 && !!findExpandedLexiconTopicContent(LEXICON_PLANET_TOPIC_LABEL), items.length > 0);
   if (items.length === 0) return;
   const snapshot = JSON.stringify(items);
   if (snapshot === lastLexiconPlanetsSnapshot) return;
