@@ -49,7 +49,7 @@ means the extension needs an update, not that your save is broken.
 
 ## Category
 
-Productivity (or Tools, if Productivity isn't offered as a distinct option)
+Tools (Chrome: Productivity was not selectable, 2026-11-06). Edge: Productivity.
 
 ## Single purpose description
 
