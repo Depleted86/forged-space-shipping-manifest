@@ -16,7 +16,7 @@ Copy/paste source for each version's AMO submission fields - "Release Notes" (pu
 
 ### Notes for reviewers (private)
 
-Update to a previously-submitted extension (v4.0, submitted 2026-10-31). No permission changes: still just `storage` and the single host permission for `https://forgedspace.com/*`. Still no network requests of any kind; all data stays in `browser.storage.local`.
+Update to a previously-approved extension (v4.0, submitted 2026-10-31, approved). No permission changes: still just `storage` and the single host permission for `https://forgedspace.com/*`. Still no network requests of any kind; all data stays in `browser.storage.local`.
 
 **Worth a direct look:**
 
@@ -28,7 +28,7 @@ Also removed: the hand-entry inputs for game-supplied values, the blueprint edit
 
 **Re: the "Unsupported /background/service_worker manifest property is ignored by Firefox" warning**, if it appears again: expected and unchanged since v3.1 (`manifest.json` declares both `service_worker` and `scripts` so one manifest works on Chrome/Edge and Firefox). The Chrome/Edge packages from `build.sh` drop `scripts` and `browser_specific_settings`.
 
-## 4.0 (submitted 2026-10-31)
+## 4.0 (submitted 2026-10-31, approved - confirmed 2026-11-05)
 
 ### Release notes (public)
 
