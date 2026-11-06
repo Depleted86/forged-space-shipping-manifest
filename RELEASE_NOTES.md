@@ -19,7 +19,7 @@ Supersedes 4.1 (submitted 2026-11-05, still in review); everything in its notes 
 - **New Commercial Storage reader (`scrapeStoragePanel()`).** The game replaced its storage window. The new reader finds the list by its `role="listbox"` / `aria-label`, and reads each item's name and "N units" text with `querySelectorAll`, `textContent` and `getAttribute("aria-label")` only. Same read-only pattern as the existing scrapers: no `.click()`, `.dispatchEvent()`, value assignment or other page mutation. The old readers stay as fallbacks.
 - **"Can't read this screen" notice (`reportScreenRead()`).** When a screen's title is on the page but nothing could be read from it for two polls, a text notice is shown for 8 seconds. It reuses the existing Shadow DOM notice host (`#fsc-toast-host`) from 4.1, with text set via `textContent`, and logs one `console.warn`.
 
-## 4.1 (submitted to AMO and Edge Add-ons 2026-11-05)
+## 4.1 (submitted to AMO and Edge Add-ons 2026-11-05; Edge approved by 2026-11-06)
 
 ### Release notes (public)
 
