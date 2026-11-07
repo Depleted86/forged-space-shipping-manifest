@@ -14,6 +14,7 @@ Copy/paste source for each version's AMO submission fields - "Release Notes" (pu
   - marked 👁 when a blueprint has only been seen in a store's list, not opened, so its materials aren't saved yet.
 - **Assemblers per item.** Each Assembly item in the Manifest overlay has an "Asm:" box for how many Assemblers you have making it, and its time is shared between them (39 runs on 2 Assemblers shows 20.0h). Plan a Build shows the same times, and the counts travel with Export/Import.
 - **Refresh reminder each session.** When you start playing, a small "Refresh your data" window reminds you to open Commercial Storage and Skills, ticks each off as you do, and closes by itself. Turn it off under Settings → Reminders.
+- Fixed: Commercial Storage syncing again after the game's 7 November update changed how amounts are shown.
 - Fixed: after changing a store's filters, a blueprint is only saved once it's one of the blueprints listed - the previously open one isn't re-saved, and filtering down to nothing no longer warns that the store can't be read.
 - The welcome page now takes new players straight to the game.
 

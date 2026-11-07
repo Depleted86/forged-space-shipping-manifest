@@ -108,7 +108,7 @@ function scrapeStorageRows() {
 // withdraw" checkbox - before its style classes, which a restyle is far more
 // likely to rename. The classes are only a fallback.
 const STORAGE_PANEL_TITLE = "Commercial Storage";
-const STORAGE_UNITS_TEXT = /^([\d,.]+)\s+units?$/i;
+const STORAGE_UNITS_TEXT = /^([\d,.]+)\s*units?$/i;
 
 function storageList() {
   const labelled = document.querySelector('[role="listbox"][aria-label="Your storage"]');
@@ -130,10 +130,13 @@ function storageTileName(tile) {
   return null;
 }
 
+// The element reading "41,347 units" - by its whole text, since the game
+// splits it across tags ("41,347<small> units</small>" since the
+// 2026-11-07 update). Only an element whose text is exactly that matches,
+// so the tile itself, the credit value ("1,695,227 CR") and the rest don't.
 function storageTileQuantity(tile) {
   for (const el of tile.querySelectorAll("*")) {
-    if (el.children.length > 0) continue;
-    const units = el.textContent.trim().match(STORAGE_UNITS_TEXT);
+    const units = el.textContent.replace(/\s+/g, " ").trim().match(STORAGE_UNITS_TEXT);
     if (units) return parseFloat(units[1].replace(/,/g, ""));
   }
   return null;
