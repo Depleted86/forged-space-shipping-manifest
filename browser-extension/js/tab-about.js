@@ -16,17 +16,31 @@
 // just marketing copy.
 
 import { el } from "./dom-helpers.js";
+import * as storage from "./storage.js";
 
 export function initAboutTab(app, container) {
+  // Brings the in-game Manifest Setup window (js/overlay-setup.js) back,
+  // even once setup is finished - it appears on the game page at once if
+  // that's open, otherwise the next time it loads.
+  const setupStatus = el("div", { class: "status-text" });
+  async function showSetup() {
+    const progress = await storage.loadGettingStarted();
+    await storage.saveGettingStarted({ ...progress, dismissed: false, showRequested: true });
+    setupStatus.textContent = "The Manifest Setup window is now showing on the game page (or will be next time it loads).";
+    setupStatus.className = "status-ok";
+  }
+
   container.appendChild(
     el("div", { class: "about-panel" }, [
       el("h2", { text: "About Forged Space Shipping Manifest" }),
+      el("div", { class: "toolbar" }, [el("button", { text: "Show Manifest Setup", onclick: showSetup })]),
+      setupStatus,
       el("p", { text: "This extension was developed with explicit permission from Coops, the developer of Forged Space." }),
       el("p", {
         text: "It makes no network requests of any kind and never transmits anything anywhere. The only data it stores is your own Forged Space game data (inventory, blueprints, builds, and settings), saved locally in your browser and nowhere else.",
       }),
       el("p", {
-        text: "It is strictly read-only: it only reads what's already on the page you're looking at. It never clicks anything, fills in a form, or takes any action in the game on your behalf. The one piece of its own UI it adds to the page - the floating Manifest panel - is a separate, self-contained overlay the extension draws and controls itself; it doesn't read from, write to, or change the game's own interface in any way.",
+        text: "It is strictly read-only: it only reads what's already on the page you're looking at. It never clicks anything, fills in a form, or takes any action in the game on your behalf. Its own UI on the page - the floating Manifest panel, the Manifest Setup checklist and short notices - is drawn and controlled by the extension itself, separate from the game's own interface, and it never writes to or changes that interface in any way.",
       }),
       el("p", {}, [
         "The source code is public on ",

@@ -113,19 +113,98 @@ export function blueprintStoreGroup(blueprint) {
 }
 
 // names (already sorted however the caller wants) split into
-// [[group, names], ...] in STORE_GROUPS order - any new store category's
-// group just before "Other" - with empty groups left out.
+// [[group, names], ...]: one group per store group, in STORE_GROUPS order -
+// any new store category's group just before "Other" - and within it one
+// per type learnt from the store's type filter ("Blueprints › Systems"),
+// alphabetically, with that store's not-yet-typed blueprints after under
+// the plain store group name. Empty groups are left out.
 export function groupBlueprintNames(names, blueprints) {
-  const byGroup = new Map(STORE_GROUPS.map((g) => [g, []]));
+  const byGroup = new Map();
   for (const name of names) {
-    const group = blueprintStoreGroup(blueprints[name]);
-    if (!byGroup.has(group)) byGroup.set(group, []);
-    byGroup.get(group).push(name);
+    const base = blueprintStoreGroup(blueprints[name]);
+    const type = blueprints[name]?.store?.storeType || null;
+    const key = type ? `${base} › ${type}` : base;
+    if (!byGroup.has(key)) byGroup.set(key, { base, type, names: [] });
+    byGroup.get(key).names.push(name);
   }
-  const groups = [...byGroup].filter(([, list]) => list.length > 0);
   const rank = (g) => (g === "Other" ? Infinity : STORE_GROUPS.includes(g) ? STORE_GROUPS.indexOf(g) : STORE_GROUPS.length - 1);
-  return groups.sort((a, b) => rank(a[0]) - rank(b[0]));
+  return [...byGroup]
+    .sort(([, a], [, b]) =>
+      rank(a.base) - rank(b.base) ||
+      a.base.localeCompare(b.base) ||
+      (a.type ? 0 : 1) - (b.type ? 0 : 1) ||
+      (a.type || "").localeCompare(b.type || "")
+    )
+    .map(([key, group]) => [key, group.names]);
 }
+
+// After a blueprint's name in every blueprint dropdown when it's only been
+// seen in a store's list, never opened there, so its materials aren't known
+// yet.
+export const UNVIEWED_MARK = "👁";
+
+// How a blueprint reads in every blueprint dropdown: its name, with the
+// unviewed mark after. The requirement dot in front comes from markRequirements().
+export function blueprintOptionLabel(name, blueprint) {
+  return blueprint && !blueprint.hasRecipe() ? `${name} ${UNVIEWED_MARK}` : name;
+}
+
+// Hours an Assembly item takes with `assemblers` Assemblers all making it:
+// `hours` is its one-hour runs, shared out between them and rounded up to
+// whole runs, since a run can't be split. Set per item in the Manifest
+// overlay (settings.assembler_counts); 1 when unset. null stays null.
+export function assemblyHoursWith(hours, assemblers) {
+  if (hours == null) return null;
+  const count = Math.max(1, Math.floor(assemblers || 1));
+  return count > 1 ? Math.ceil(hours / count) : hours;
+}
+
+// Whether a blueprint needs more Manufacturing Skill than the player has
+// (read from Character Skills) - false while either isn't known.
+export function blueprintSkillTooLow(blueprint, manufacturingSkill) {
+  const need = blueprint?.store?.mfgSkill;
+  return need != null && manufacturingSkill != null && need > manufacturingSkill;
+}
+
+// In front of a blueprint's name in every blueprint dropdown: whether the
+// player meets what it needs to build - Manufacturing Skill, or Captain
+// level for Starship blueprints. Emoji, since they keep their colour in
+// every browser - Firefox ignores option text and background colours in
+// these lists.
+export const SKILL_OK_MARK = "🟢";
+export const SKILL_TOO_LOW_MARK = "🔴";
+
+// Adds the requirement dot to a blueprint dropdown option, and the
+// requirements as its tooltip: "MFG Req 18/24" (Manufacturing Skill needed /
+// the player's), "Captain Lvl Req 30/42" for Starship blueprints, "?" while
+// the player's level isn't known yet. `settings` gives the player's levels
+// (manufacturing_skill, captain_level, read from the game). Red when any
+// requirement is above the player's level; no dot until every requirement
+// can be checked; blueprints with neither requirement are left as they are.
+export function markRequirements(option, blueprint, settings) {
+  const reqs = [
+    ["MFG Req", blueprint?.store?.mfgSkill, settings?.manufacturing_skill],
+    ["Captain Lvl Req", blueprint?.captainLevel, settings?.captain_level],
+  ].filter(([, need]) => need != null);
+  if (reqs.length === 0) return option;
+  option.title = reqs.map(([label, need, have]) => `${label} ${need}/${have ?? "?"}`).join(" · ");
+  if (reqs.some(([, , have]) => have == null)) return option;
+  const tooLow = reqs.some(([, need, have]) => need > have);
+  option.textContent = `${tooLow ? SKILL_TOO_LOW_MARK : SKILL_OK_MARK} ${option.textContent}`;
+  if (tooLow) option.style.color = "#f87171";
+  return option;
+}
+
+// Blueprint names in dropdown order: by Manufacturing Skill needed, lowest
+// first, then by Captain level needed (Starship blueprints), then by name -
+// those with neither known yet after the rest.
+export function sortBlueprintNamesBySkill(names, blueprints) {
+  const skillOf = (name) => blueprints[name]?.store?.mfgSkill ?? Infinity;
+  const captainOf = (name) => blueprints[name]?.captainLevel ?? Infinity;
+  return [...names].sort((a, b) => skillOf(a) - skillOf(b) || captainOf(a) - captainOf(b) || a.localeCompare(b));
+}
+
+export const BLUEPRINT_LIST_LEGEND = `${SKILL_OK_MARK} / ${SKILL_TOO_LOW_MARK} = your Manufacturing Skill (Captain level for ships) is / isn't high enough - hover for the requirement. ${UNVIEWED_MARK} = seen in a store but not opened yet - click it in the store to save its materials.`;
 
 // Shown wherever a blueprint with no materials yet is picked - the game
 // only shows a recipe once the blueprint is opened in its store, which is
@@ -1027,7 +1106,7 @@ export function parseCorpCsv(text) {
 // imports here too.
 export const TRANSFER_FORMAT = "fsc-transfer";
 export const TRANSFER_KEYS = ["blueprints", "assemblyPlans", "builds", "buildLabels", "activeBuildName", "activeCorpBuildName", "corpHaveOverrides", "harvesters", "scrapedPlanetTypes", "planetSyncMeta", "settings"];
-export const TRANSFER_SETTINGS = ["max_harvesters", "ore_choices", "item_acquisition_mode"];
+export const TRANSFER_SETTINGS = ["max_harvesters", "ore_choices", "item_acquisition_mode", "assembler_counts"];
 
 // Merges an imported transfer file into this browser's current data
 // (`current` has the same keys) instead of replacing it, so importing into
@@ -1046,7 +1125,8 @@ export const TRANSFER_SETTINGS = ["max_harvesters", "ore_choices", "item_acquisi
 //   selected here.
 // - Corp "Have" overrides and Lexicon planet types: added for names
 //   without one here.
-// - Ore choices and buy/craft modes: added for items without one here; with
+// - Ore choices, buy/craft modes and assembler counts: added for items
+//   without one here; with
 //   `replace.choices`, the file's win where both have one.
 // - Harvester slots: taken from the file, with its slot count, when no slot
 //   here has a resource assigned, or with `replace.harvesters` - two rosters
@@ -1074,7 +1154,7 @@ export function transferConflicts(current, incoming) {
     (JSON.stringify(slotsHere.map((s) => [s?.resource ?? null, s?.rate ?? 0])) !== JSON.stringify(slotsThere.map((s) => [s?.resource ?? null, s?.rate ?? 0])) ||
       (there.max_harvesters != null && there.max_harvesters !== here.max_harvesters));
   const choices = [];
-  for (const field of ["ore_choices", "item_acquisition_mode"]) {
+  for (const field of ["ore_choices", "item_acquisition_mode", "assembler_counts"]) {
     const mine = here[field] || {};
     for (const [item, value] of Object.entries(there[field] || {})) {
       if (item in mine && mine[item] !== value && !choices.includes(item)) choices.push(item);
@@ -1143,7 +1223,7 @@ export function mergeTransferData(current, incoming, replace = {}) {
 
   const settings = { ...(current.settings || {}) };
   const inSettings = incoming.settings || {};
-  for (const field of ["ore_choices", "item_acquisition_mode"]) {
+  for (const field of ["ore_choices", "item_acquisition_mode", "assembler_counts"]) {
     if (!inSettings[field]) continue;
     settings[field] = replace.choices ? { ...(settings[field] || {}), ...inSettings[field] } : { ...inSettings[field], ...(settings[field] || {}) };
   }

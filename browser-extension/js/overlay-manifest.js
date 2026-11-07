@@ -26,7 +26,7 @@ import { openAddToBuildModal } from "./overlay-blueprint-modal.js";
 import { Catalog } from "./catalog.js";
 import * as storage from "./storage.js";
 import { formatHours } from "./dom-helpers.js";
-import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint } from "./calc-engine.js";
+import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, markRequirements, assemblyHoursWith } from "./calc-engine.js";
 
 const MAX_Z_INDEX = 2147483647; // largest valid CSS z-index - guarantees this paints above anything the game's own page sets, regardless of its own stacking contexts
 
@@ -98,6 +98,13 @@ let corpData = { available: false, items: [] };
 let overlayVisible = false;
 let builds = {}; // buildName -> [[kind, itemName, qty], ...], mirrors storage.js's `builds` key
 let blueprints = {}; // blueprintName -> Blueprint, mirrors storage.js's `blueprints` key
+// The player's Manufacturing Skill and Captain level (from settings, read
+// from Character Skills and the top bar) - blueprints needing more are
+// marked in the dropdowns (markRequirements()).
+let playerLevels = { manufacturing_skill: null, captain_level: null };
+// { commodityName: n } Assemblers making each Assembly item (settings.
+// assembler_counts) - set in each Assembly row's "Asm:" box.
+let assemblerCounts = {};
 let buildLabels = {}; // buildId -> custom display name, mirrors storage.js's `buildLabels` key
 let manifestSelection = null; // { type: "build"|"blueprint", name: string } | null - see storage.js
 let manifestCorpSelection = null; // Corp-view counterpart - { type: "build"|"blueprint", name: string } | null, see storage.js's manifestCorpSelection
@@ -501,6 +508,15 @@ const STYLE = `
     color: #94a3b8;
     white-space: nowrap;
   }
+  .fsc-row-controls {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .fsc-row-controls .fsc-mode-select {
+    max-width: none;
+  }
   .fsc-assembly-row {
     background: rgba(167, 139, 250, 0.16) !important;
   }
@@ -578,6 +594,20 @@ export function initManifestOverlay() {
     // A build may have just been renamed on the dashboard's Plan a Build tab
     // (see tab-plan.js's "Rename Build..." button) - keep both dropdowns'
     // display text in sync rather than showing a stale label.
+    if (changes.settings) {
+      const next = changes.settings.newValue || {};
+      const levels = { manufacturing_skill: next.manufacturing_skill ?? null, captain_level: next.captain_level ?? null };
+      if (levels.manufacturing_skill !== playerLevels.manufacturing_skill || levels.captain_level !== playerLevels.captain_level) {
+        playerLevels = levels;
+        refreshSelectionSelector();
+        refreshCorpSelectionSelector();
+      }
+      const counts = next.assembler_counts || {};
+      if (JSON.stringify(counts) !== JSON.stringify(assemblerCounts)) {
+        assemblerCounts = counts;
+        changed = true;
+      }
+    }
     if (changes.buildLabels) {
       storage.loadBuildLabels().then((labels) => {
         buildLabels = labels;
@@ -601,7 +631,10 @@ export function initManifestOverlay() {
     storage.loadBuilds(),
     storage.loadBlueprints(),
     storage.loadBuildLabels(),
-  ]).then(([result, loadedBuilds, loadedBlueprints, loadedBuildLabels]) => {
+    storage.loadSettings(),
+  ]).then(([result, loadedBuilds, loadedBlueprints, loadedBuildLabels, loadedSettings]) => {
+    playerLevels = { manufacturing_skill: loadedSettings.manufacturing_skill ?? null, captain_level: loadedSettings.captain_level ?? null };
+    assemblerCounts = loadedSettings.assembler_counts || {};
     personalData = result.manifestToMineData || { available: false };
     corpData = result.manifestCorpToMineData || { available: false, items: [], refined: [] };
     manifestSelection = result.manifestSelection || null;
@@ -615,9 +648,20 @@ export function initManifestOverlay() {
   });
 }
 
+// Set once the overlay's first opening is recorded for the dashboard's
+// Manifest Setup window (overlay-setup.js), so later toggles don't write again.
+let overlayOpeningRecorded = false;
+
 export function toggleManifestOverlay() {
   overlayVisible = !overlayVisible;
   panelEl.classList.toggle("fsc-visible", overlayVisible);
+  if (overlayVisible && !overlayOpeningRecorded) {
+    overlayOpeningRecorded = true;
+    storage
+      .loadGettingStarted()
+      .then((state) => (state.overlayOpened ? null : storage.saveGettingStarted({ ...state, overlayOpened: true })))
+      .catch(() => {});
+  }
   // The panel's own header already has a close button once it's open, so
   // the edge handle sitting there too is just redundant clutter (and can
   // visually overlap the panel depending on viewport size/panel height,
@@ -923,11 +967,12 @@ function refreshClassFilters() {
 
 // The Blueprints a "Farm:" dropdown lists under the current class filter -
 // always including the one already selected, so the dropdown never shows
-// blank just because the filter hides it.
+// blank just because the filter hides it - by Manufacturing Skill needed.
 function filteredBlueprintNames(selection) {
-  return Object.keys(blueprints)
-    .filter((name) => inShipClass(blueprints[name], blueprintClassFilter) || (selection?.type === "blueprint" && selection.name === name))
-    .sort();
+  return sortBlueprintNamesBySkill(
+    Object.keys(blueprints).filter((name) => inShipClass(blueprints[name], blueprintClassFilter) || (selection?.type === "blueprint" && selection.name === name)),
+    blueprints
+  );
 }
 
 // One optgroup per store the blueprints came from (Blueprints, Ships, ...).
@@ -938,8 +983,8 @@ function appendBlueprintGroups(select, names) {
     for (const name of groupNames) {
       const opt = document.createElement("option");
       opt.value = `blueprint:${name}`;
-      opt.textContent = name;
-      group.appendChild(opt);
+      opt.textContent = blueprintOptionLabel(name, blueprints[name]);
+      group.appendChild(markRequirements(opt, blueprints[name], playerLevels));
     }
     select.appendChild(group);
   }
@@ -1050,7 +1095,9 @@ function refreshCorpSelectionSelector() {
 // away from right/top-anchored placement to left/top-anchored the moment a
 // drag starts (so the panel doesn't visually jump the instant it's grabbed
 // - it started anchored by `right` for a sensible default first-open spot).
-function makeDraggable(panel, handle) {
+// `onDrop(left, top)`, when given, is called where a drag ends - the Manifest
+// Setup window (overlay-setup.js) uses it to remember its spot.
+export function makeDraggable(panel, handle, onDrop = null) {
   let dragging = false;
   let startX = 0;
   let startY = 0;
@@ -1080,6 +1127,10 @@ function makeDraggable(panel, handle) {
     panel.style.top = `${top}px`;
   });
   document.addEventListener("mouseup", () => {
+    if (dragging && onDrop) {
+      const rect = panel.getBoundingClientRect();
+      onDrop(rect.left, rect.top);
+    }
     dragging = false;
   });
 }
@@ -1453,12 +1504,61 @@ function renderAssemblyRow(item) {
   const row = document.createElement("div");
   row.addEventListener("click", () => toggleFocus("assembly", item.name));
   row.className = "fsc-row fsc-assembly-row fsc-row-flex fsc-row-clickable";
-  const hoursText = item.hours != null ? formatHours(item.hours) : "rate unknown";
+  const assemblers = assemblerCounts[item.name] || 1;
+  const hours = assemblyHoursWith(item.hours, assemblers);
+  const hoursText = hours != null ? formatHours(hours) : "rate unknown";
   const label = document.createElement("span");
   label.textContent = `${item.name}: ${Math.round(item.need).toLocaleString()} (${hoursText})`;
-  label.title = label.textContent;
-  row.append(label, renderModeSelect(item.name, "mine"));
+  label.title = assemblers > 1 ? `${label.textContent} with ${assemblers} Assemblers` : label.textContent;
+  const controls = document.createElement("span");
+  controls.className = "fsc-row-controls";
+  controls.append(buildAssemblerControl(item.name, assemblers), renderModeSelect(item.name, "mine"));
+  row.append(label, controls);
   return row;
+}
+
+// The "Asm:" box on an Assembly row: how many Assemblers are making this
+// item, which shares its runs between them for the time shown. Edited like
+// the refining Batch box - saved on Enter or clicking away, with renders
+// held off while typing so the box isn't rebuilt under the cursor.
+function buildAssemblerControl(itemName, assemblers) {
+  const wrap = document.createElement("span");
+  wrap.className = "fsc-batch-controls";
+  const label = document.createElement("span");
+  label.className = "fsc-batch-label";
+  label.textContent = "Asm:";
+  const input = document.createElement("input");
+  input.type = "text";
+  input.inputMode = "numeric";
+  input.className = "fsc-batch-input";
+  input.style.width = "calc(2ch + 6px)";
+  input.value = String(assemblers);
+  input.setAttribute("aria-label", `Assemblers making ${itemName}`);
+  input.title = `How many Assemblers are making ${itemName} - the time is shared between them. Type a number and press Enter or click away to save.`;
+  const commit = () => {
+    const count = parseInt(input.value, 10);
+    if (Number.isNaN(count) || count < 1) {
+      input.value = String(assemblers);
+      return;
+    }
+    if (count !== assemblers) browser.runtime.sendMessage({ type: "fsc-set-assembler-count", itemName, count }).catch(() => {});
+  };
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("mousedown", (e) => e.stopPropagation());
+  input.addEventListener("focus", () => { suppressRenderWhileEditing = true; });
+  input.addEventListener("blur", () => {
+    suppressRenderWhileEditing = false;
+    commit();
+    render();
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      input.blur();
+    }
+  });
+  wrap.append(label, input);
+  return wrap;
 }
 
 function renderPlanetaryRow(item) {

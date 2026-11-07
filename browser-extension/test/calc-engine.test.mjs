@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { Catalog } from "../js/catalog.js";
-import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown, mergeTransferData, transferConflicts } from "../js/calc-engine.js";
+import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown, mergeTransferData, transferConflicts, Blueprint, blueprintOptionLabel, sortBlueprintNamesBySkill, groupBlueprintNames, markRequirements, assemblyHoursWith } from "../js/calc-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(readFileSync(join(__dirname, "fixtures.json"), "utf8"));
@@ -342,4 +342,94 @@ test("mergeTransferData: fills materials for blueprints only seen in a store lis
   assert.deepEqual(data.blueprints.Legacy, { Copper: 3 });
   assert.deepEqual(data.assemblyPlans["Circuit Boards"].requirements, { Copper: 2 });
   assert.equal(data.assemblyPlans["Circuit Boards"].captain_level, 3);
+});
+
+test("blueprint dropdowns: sorted by Manufacturing Skill, with a green/red skill dot and MFG Req tooltip", () => {
+  const make = (name, skill, recipe) => {
+    const bp = new Blueprint(name);
+    if (recipe) bp.setRequirement("Kelsalt", 5);
+    bp.store = skill === undefined ? null : { mfgSkill: skill };
+    return bp;
+  };
+  const blueprints = {
+    "Bonanza Core": make("Bonanza Core", 16, true),
+    "Antimatter Chamber": make("Antimatter Chamber", 3, true),
+    "Hawk": make("Hawk", null, true),
+    "Defense Shield Z1": make("Defense Shield Z1", 3, false),
+    "Old Hand-Entered": make("Old Hand-Entered", undefined, true),
+  };
+  assert.deepEqual(sortBlueprintNamesBySkill(Object.keys(blueprints), blueprints), ["Antimatter Chamber", "Defense Shield Z1", "Bonanza Core", "Hawk", "Old Hand-Entered"]);
+  assert.equal(blueprintOptionLabel("Bonanza Core", blueprints["Bonanza Core"]), "Bonanza Core");
+  assert.equal(blueprintOptionLabel("Defense Shield Z1", blueprints["Defense Shield Z1"]), "Defense Shield Z1 👁");
+  // The skill dot and tooltip, on a stand-in for an <option>.
+  const option = (text) => ({ textContent: text, title: "", style: {} });
+  const ok = markRequirements(option("Antimatter Chamber"), blueprints["Antimatter Chamber"], { manufacturing_skill: 24 });
+  assert.deepEqual([ok.textContent, ok.title, ok.style.color], ["🟢 Antimatter Chamber", "MFG Req 3/24", undefined]);
+  const low = markRequirements(option("Bonanza Core"), blueprints["Bonanza Core"], { manufacturing_skill: 12 });
+  assert.deepEqual([low.textContent, low.title, low.style.color], ["🔴 Bonanza Core", "MFG Req 16/12", "#f87171"]);
+  const unknown = markRequirements(option("Bonanza Core"), blueprints["Bonanza Core"], { manufacturing_skill: null });
+  assert.deepEqual([unknown.textContent, unknown.title], ["Bonanza Core", "MFG Req 16/?"]);
+  // Hawk has no Manufacturing Skill shown and no Captain level: left alone.
+  const bare = markRequirements(option("Hawk"), blueprints.Hawk, { manufacturing_skill: 24, captain_level: 42 });
+  assert.deepEqual([bare.textContent, bare.title], ["Hawk", ""]);
+  // Starship blueprints: checked against the Captain level instead.
+  const atlas = new Blueprint("Atlas");
+  atlas.captainLevel = 10;
+  const vulture = new Blueprint("Vulture");
+  vulture.captainLevel = 50;
+  const shipOk = markRequirements(option("Atlas"), atlas, { manufacturing_skill: 24, captain_level: 42 });
+  assert.deepEqual([shipOk.textContent, shipOk.title], ["🟢 Atlas", "Captain Lvl Req 10/42"]);
+  const shipLow = markRequirements(option("Vulture"), vulture, { manufacturing_skill: 24, captain_level: 42 });
+  assert.deepEqual([shipLow.textContent, shipLow.title], ["🔴 Vulture", "Captain Lvl Req 50/42"]);
+  // Both requirements: red if either is too high, both in the tooltip.
+  const both = new Blueprint("Both");
+  both.captainLevel = 50;
+  both.store = { mfgSkill: 3 };
+  const bothRes = markRequirements(option("Both"), both, { manufacturing_skill: 24, captain_level: 42 });
+  assert.deepEqual([bothRes.textContent, bothRes.title], ["🔴 Both", "MFG Req 3/24 · Captain Lvl Req 50/42"]);
+  // Ships sort by Captain level after the Manufacturing Skill ones.
+  assert.deepEqual(sortBlueprintNamesBySkill(["Vulture", "Atlas", "Bonanza Core"], { Vulture: vulture, Atlas: atlas, "Bonanza Core": blueprints["Bonanza Core"] }), ["Bonanza Core", "Atlas", "Vulture"]);
+});
+
+test("blueprint dropdowns: grouped by store, then by the type learnt from its filter", () => {
+  const make = (storeCategory, storeType) => {
+    const bp = new Blueprint("x");
+    bp.store = { storeCategory, storeType: storeType ?? null };
+    return bp;
+  };
+  const blueprints = {
+    Autocannon: make("Manufacturing", "Weapons"),
+    Reactor: make("Manufacturing", "Systems"),
+    Hauler: make("Manufacturing", null),
+    Laser: make("Manufacturing", "Weapons"),
+    Plating: make("Ship Module", "Armor"),
+    Cabin: make("Ship Module", null),
+    Hawk: make("Starship", null),
+  };
+  const names = ["Autocannon", "Cabin", "Hauler", "Hawk", "Laser", "Plating", "Reactor"];
+  assert.deepEqual(groupBlueprintNames(names, blueprints), [
+    ["Blueprints › Systems", ["Reactor"]],
+    ["Blueprints › Weapons", ["Autocannon", "Laser"]],
+    ["Blueprints", ["Hauler"]],
+    ["Ships", ["Hawk"]],
+    ["Modules › Armor", ["Plating"]],
+    ["Modules", ["Cabin"]],
+  ]);
+});
+
+test("assemblyHoursWith: runs shared between Assemblers, rounded up to whole runs", () => {
+  assert.equal(assemblyHoursWith(39, 1), 39);
+  assert.equal(assemblyHoursWith(39, undefined), 39);
+  assert.equal(assemblyHoursWith(39, 2), 20);
+  assert.equal(assemblyHoursWith(39, 3), 13);
+  assert.equal(assemblyHoursWith(16, 5), 4);
+  assert.equal(assemblyHoursWith(null, 2), null);
+});
+
+test("mergeTransferData: assembler counts travel with the hand-set settings", () => {
+  const current = { settings: { assembler_counts: { "Hull Frames": 2 } } };
+  const incoming = { settings: { assembler_counts: { "Hull Frames": 3, "Industrial Tech": 1 } } };
+  assert.deepEqual(transferConflicts(current, incoming).choices, ["Hull Frames"]);
+  assert.deepEqual(mergeTransferData(current, incoming).data.settings.assembler_counts, { "Hull Frames": 2, "Industrial Tech": 1 });
+  assert.deepEqual(mergeTransferData(current, incoming, { choices: true }).data.settings.assembler_counts, { "Hull Frames": 3, "Industrial Tech": 1 });
 });

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Forged Space Shipping Manifest",
-  "version": "4.1.1",
+  "version": "4.2",
   "description": "Mining, refining, and assembly planner for Forged Space, with an in-game Manifest overlay and corp order tracking.",
   "permissions": [
     "storage"
@@ -31,7 +31,9 @@
         "js/calc-engine.js",
         "js/storage.js",
         "js/ores-data.js",
-        "js/planets-data.js"
+        "js/planets-data.js",
+        "js/setup-steps.js",
+        "js/overlay-setup.js"
       ],
       "matches": ["https://forgedspace.com/*"]
     }

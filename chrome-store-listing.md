@@ -33,7 +33,7 @@ exported to a file and imported on another browser or PC.
 This extension is strictly read-only and makes no network requests of any
 kind. It only reads the game screens you open on forgedspace.com - it
 never clicks, submits, or automates anything in the game on your behalf.
-Its on-page UI (the Manifest overlay and short blueprint notices) is
+Its on-page UI (the Manifest overlay, a setup checklist and short notices) is
 drawn and controlled by the extension itself, separate from the game's
 own page, and it never modifies the game's page content. Everything it stores (blueprints,
 inventory, builds, settings) stays local to your own browser and is never

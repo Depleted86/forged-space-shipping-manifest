@@ -157,7 +157,11 @@ async function bootstrap() {
     // read-time rather than caching a reference, so this is safe.
     if (changes.settings) {
       storage.loadSettings().then((settings) => {
+        // Assembler counts set in the Manifest overlay change Plan a Build's
+        // Assembly times, so it redraws with them.
+        const countsChanged = JSON.stringify(settings.assembler_counts || {}) !== JSON.stringify(app.settings.assembler_counts || {});
         app.settings = settings;
+        if (countsChanged && app.refreshHooks.plan) app.refreshHooks.plan();
         app.maxHarvesters = Number(settings.max_harvesters || app.maxHarvesters);
         // A different slot count also needs the roster resized, or the
         // Planets tab keeps showing the old number of rows.
@@ -169,6 +173,7 @@ async function bootstrap() {
         }
         if (app.refreshHooks.planCargoCapacity) app.refreshHooks.planCargoCapacity();
         if (app.refreshHooks.blueprintsSkill) app.refreshHooks.blueprintsSkill();
+        if (app.refreshHooks.planBlueprintCombo) app.refreshHooks.planBlueprintCombo();
         if (app.refreshHooks.settingsFields) app.refreshHooks.settingsFields();
       });
     }
@@ -222,7 +227,17 @@ function setupTabSwitching(defaultTab) {
   for (const btn of buttons) {
     btn.addEventListener("click", () => activate(btn.dataset.tab));
   }
-  activate(defaultTab);
+  // dashboard.html#planets opens on that tab - the in-game Manifest Setup
+  // window's Open buttons link here (see background.js's handleOpenDashboard()).
+  const fromHash = () => {
+    const tabId = location.hash.slice(1);
+    return buttons.some((btn) => btn.dataset.tab === tabId) ? tabId : null;
+  };
+  window.addEventListener("hashchange", () => {
+    const tabId = fromHash();
+    if (tabId) activate(tabId);
+  });
+  activate(fromHash() || defaultTab);
 }
 
 bootstrap();

@@ -287,6 +287,7 @@ function checkStorage() {
   const items = docking.items.length > 0 ? docking.items : scrapeCommercialStoragePanelRows();
   const complete = docking.items.length > 0 && docking.complete;
   reportScreenRead("Commercial Storage", items.length === 0 && storageScreenOpen(), items.length > 0);
+  if (items.length > 0 && setupWindows) setupWindows.noteRead("storage");
   if (items.length === 0) {
     // Screen closed - forget what was last sent, so reopening it always
     // resyncs (the stored inventory may have changed meanwhile, e.g. from
@@ -565,6 +566,28 @@ function parseCredits(text) {
   return match ? parseInt(match[1].replace(/,/g, ""), 10) : null;
 }
 
+// The store's type filter ("All Module Types" -> "Armor", or "Systems" in
+// the Blueprint Store): the type chosen, or null while it's on All. Cards
+// don't show their type, so a blueprint's type is only known while the list
+// is filtered to one - background.js keeps it once learnt. The class filter
+// ("All Classes" -> "Miner") is a separate <select>, told apart by its first
+// option.
+function storeTypeFilter(panel) {
+  for (const select of panel.querySelectorAll("select")) {
+    const first = select.options[0] ? select.options[0].textContent.trim() : "";
+    if (!/^All\b/i.test(first) || /^All Classes$/i.test(first)) continue;
+    return select.selectedIndex > 0 ? select.options[select.selectedIndex].textContent.trim() : null;
+  }
+  return null;
+}
+
+// Whether the store's list is narrowed down: a filter (type or class) off
+// All, or text in its search box.
+function storeFiltersActive(panel) {
+  if ([...panel.querySelectorAll("select")].some((select) => select.selectedIndex > 0)) return true;
+  return [...panel.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].some((input) => input.value.trim() !== "");
+}
+
 function scrapeBlueprintStore() {
   const found = blueprintStorePanel();
   if (!found) return null;
@@ -642,14 +665,29 @@ function scrapeBlueprintStore() {
   // Whether an open blueprint's materials heading is on screen at all, so
   // materials that stop reading are noticed (see blueprintStoreReadOk()).
   const materialsShown = leafTexts(panel).some((t) => /^Resource Requirements$/i.test(t));
-  return list.length || detail ? { list, detail, storeName: found.title, storeCategory: found.category, materialsShown } : null;
+  const storeType = storeTypeFilter(panel);
+  // Changing a filter doesn't close the open blueprint, so the panel can
+  // still show one whose card the new filter has hidden. Its materials only
+  // count when it matches a card in the list showing - otherwise it isn't
+  // what the player has selected, so it isn't saved or announced.
+  const detailStale = !!detail && !list.some((card) => card.name === detail.name);
+  if (detailStale) detail = null;
+  // Filters that match nothing leave the list empty, but the game keeps the
+  // last blueprint open beside it - nothing to read, so nothing is saved
+  // (that old blueprint isn't re-announced) and it isn't an unreadable store.
+  if (list.length === 0 && storeFiltersActive(panel)) {
+    return { list, detail: null, storeName: found.title, storeCategory: found.category, storeType, materialsShown, nothingListed: true };
+  }
+  return list.length || detail ? { list, detail, storeName: found.title, storeCategory: found.category, storeType, materialsShown, detailStale } : null;
 }
 
 // Read when its cards were, and - with a blueprint's materials on screen -
-// those materials too.
+// those materials too, unless that blueprint is a leftover from before a
+// filter change (detailStale), which is skipped on purpose.
 function blueprintStoreReadOk(scraped) {
+  if (scraped && scraped.nothingListed) return true;
   if (!scraped || scraped.list.length === 0) return false;
-  return !scraped.materialsShown || (!!scraped.detail && Object.keys(scraped.detail.requirements).length > 0);
+  return !scraped.materialsShown || scraped.detailStale || (!!scraped.detail && Object.keys(scraped.detail.requirements).length > 0);
 }
 
 function checkBlueprintStore() {
@@ -659,16 +697,21 @@ function checkBlueprintStore() {
     lastRecipeNotice = null;
     return;
   }
+  // Keeps lastRecipeNotice, so clearing the filter with the same blueprint
+  // still open doesn't announce it again.
+  if (scraped.nothingListed) return;
   const snapshot = JSON.stringify(scraped);
   if (snapshot === lastBlueprintStoreSnapshot) return;
   // See checkCorpStore()'s comment for why this is only marked sent once
   // background.js confirms it.
   browser.runtime
-    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail, storeName: scraped.storeName, storeCategory: scraped.storeCategory })
+    .sendMessage({ type: "fsc-blueprint-store-scrape", list: scraped.list, detail: scraped.detail, storeName: scraped.storeName, storeCategory: scraped.storeCategory, storeType: scraped.storeType })
     .then((result) => {
       lastBlueprintStoreSnapshot = snapshot;
       if (!result || !result.blueprint) {
-        if (!scraped.detail) lastRecipeNotice = null;
+        // A skipped leftover blueprint (detailStale) keeps the memory, so
+        // clearing the filter with it still open doesn't announce it again.
+        if (!scraped.detail && !scraped.detailStale) lastRecipeNotice = null;
         return;
       }
       const notice = `${result.blueprint}|${result.recipeStatus}`;
@@ -825,6 +868,11 @@ function scrapeCaptainLevel() {
   return null;
 }
 
+// overlay-setup.js once loaded (see the import at the bottom): the Manifest
+// Setup window, and the session reminder told here when storage and skills
+// have been read and when the player is in the game.
+let setupWindows = null;
+
 function checkSkills() {
   const manufacturing = scrapeSkillLevel("Manufacturing");
   const engineering = scrapeSkillLevel("Engineering");
@@ -837,6 +885,11 @@ function checkSkills() {
   const skillsRead =
     manufacturing !== null || engineering !== null || [...document.querySelectorAll("h4")].some((h4) => /Level\s*\d+/i.test(h4.parentElement.textContent || ""));
   reportScreenRead("Character Skills", skillsWindowOpen, skillsRead);
+  if (setupWindows) {
+    if (manufacturing !== null || engineering !== null) setupWindows.noteRead("skills");
+    // The top bar is only on screen once the player is in the game.
+    if (captain !== null || holds !== null) setupWindows.noteInGame();
+  }
   if (manufacturing === null && engineering === null && captain === null && holds === null) return;
   const snapshot = JSON.stringify([manufacturing, engineering, captain, holds]);
   if (snapshot === lastSkillsSnapshot) return;
@@ -1006,10 +1059,19 @@ import(browser.runtime.getURL("js/overlay-manifest.js")).then((overlay) => {
   browser.runtime.onMessage.addListener((msg) => {
     if (msg && msg.type === "fsc-toggle-overlay") overlay.toggleManifestOverlay();
   });
+
+  // The "Manifest Setup" checklist window - shown only while setup isn't
+  // finished or skipped (see overlay-setup.js). After the overlay, whose
+  // drag code it reuses.
+  return import(browser.runtime.getURL("js/overlay-setup.js")).then((setup) => {
+    if (!isExtensionContextValid()) return;
+    setup.initSetupPanel();
+    setupWindows = setup;
+  });
 }).catch((err) => {
   // Without this, a failure here (e.g. a module missing from manifest.json's
   // web_accessible_resources) throws an unhandled rejection that shows up in
   // the console but leaves no trace of what broke on-page - the overlay just
   // silently never appears.
-  console.error("Forged Space Shipping Manifest: failed to load the Manifest overlay.", err);
+  console.error("Forged Space Shipping Manifest: failed to load the Manifest overlay or the Manifest Setup window.", err);
 });

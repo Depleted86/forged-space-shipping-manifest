@@ -61,7 +61,22 @@ storage.loadScrapedPlanetTypes().then((scraped) => catalog.applyScrapedPlanetTyp
 // returns a Promise is one of the recognized ways Chrome keeps an MV3
 // service worker alive until it settles, on this and other "extendable"
 // events like action.onClicked.
+// Players updating from before 4.2 set everything up long before the
+// in-game Manifest Setup window existed, so it starts hidden for them - the
+// dashboard's About tab can still show it.
+async function hideGettingStartedForExistingPlayers(previousVersion) {
+  if (!previousVersion) return;
+  const [major, minor] = String(previousVersion).split(".").map(Number);
+  if (!(major < 4 || (major === 4 && minor < 2))) return;
+  const state = await storage.loadGettingStarted();
+  if (!state.dismissed) await storage.saveGettingStarted({ ...state, dismissed: true });
+}
+
 browser.runtime.onInstalled.addListener(async (details) => {
+  if (details.reason === "update") {
+    await hideGettingStartedForExistingPlayers(details.previousVersion);
+    return;
+  }
   if (details.reason !== "install") return;
   await browser.tabs.create({ url: browser.runtime.getURL("welcome.html") });
 });
@@ -98,16 +113,22 @@ browser.action.onClicked.addListener(async () => {
 // browser.tabs directly, so it messages this instead - see content.js's
 // onMessage listener). Focuses an already-open dashboard tab if one
 // exists, rather than piling up duplicates on repeated clicks.
-async function handleOpenDashboard() {
+// `tabId` (optional) opens the dashboard on that tab - "planets", "plan" -
+// via the URL's #hash, which dashboard.js follows (used by the in-game
+// Manifest Setup window's Open buttons).
+async function handleOpenDashboard(tabId) {
   const dashboardUrl = browser.runtime.getURL("dashboard.html");
+  const targetUrl = tabId ? `${dashboardUrl}#${tabId}` : dashboardUrl;
+  // Tab queries ignore the #hash, so this also finds a dashboard already
+  // open on another tab.
   const tabs = await browser.tabs.query({ url: dashboardUrl });
   if (tabs.length > 0) {
     const tab = tabs[0];
-    await browser.tabs.update(tab.id, { active: true });
+    await browser.tabs.update(tab.id, tabId ? { active: true, url: targetUrl } : { active: true });
     if (tab.windowId != null) await browser.windows.update(tab.windowId, { focused: true });
     return;
   }
-  await browser.tabs.create({ url: dashboardUrl });
+  await browser.tabs.create({ url: targetUrl });
 }
 
 // items: [{name, quantity}, ...] scraped from the storage screen by
@@ -398,7 +419,10 @@ function blueprintKeyFor(storeName, blueprints) {
 // "saved" (first time its materials were seen), "updated" (materials or
 // quantities differed from what was stored) or "verified" (already up to
 // date) - so content.js can tell the player; null with no detail open.
-async function handleBlueprintStoreScrape(list, detail, storeName, storeCategory) {
+// storeType: the store's type filter while it's set to one ("Systems"), so
+// every listed card is of that type; null on All, which keeps what was
+// learnt before.
+async function handleBlueprintStoreScrape(list, detail, storeName, storeCategory, storeType) {
   let recipeResult = null;
   const blueprints = await storage.loadBlueprints();
   for (const item of list || []) {
@@ -420,6 +444,7 @@ async function handleBlueprintStoreScrape(list, detail, storeName, storeCategory
       engReq: item.engReq ?? blueprint.store?.engReq ?? null,
       storeName: storeName || blueprint.store?.storeName || null,
       storeCategory: storeCategory || blueprint.store?.storeCategory || null,
+      storeType: storeType || blueprint.store?.storeType || null,
     };
     blueprints[key] = blueprint;
   }
@@ -712,6 +737,20 @@ async function handleSetItemAcquisitionMode(itemName, mode) {
   await recalculateManifestSelection();
 }
 
+// Lets the Manifest overlay's "Asm:" box record how many Assemblers are
+// making an Assembly item - display only (assemblyHoursWith()), so nothing
+// is recalculated. Through here rather than written by the overlay itself
+// for the same reason as the Farm/Buy choice above: one writer for settings.
+async function handleSetAssemblerCount(itemName, count) {
+  const n = Math.floor(Number(count));
+  if (!itemName || !Number.isFinite(n) || n < 1) return;
+  const settings = await storage.loadSettings();
+  settings.assembler_counts = { ...(settings.assembler_counts || {}) };
+  if (n === 1) delete settings.assembler_counts[itemName];
+  else settings.assembler_counts[itemName] = n;
+  await storage.saveSettings(settings);
+}
+
 // Lets the in-page Manifest overlay's selector dropdown (see js/overlay-
 // manifest.js) change which Blueprint or Build Order it's showing, without
 // opening the dashboard.
@@ -842,7 +881,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
   else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
-  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName, msg.storeCategory);
+  else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName, msg.storeCategory, msg.storeType);
   else if (msg.type === "fsc-skills-scrape") handled = handleSkillsScrape(msg.manufacturing, msg.engineering, msg.captain, msg.holds);
   else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
   else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
@@ -864,7 +903,8 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // narrow fix: a manual re-run using whatever's currently in storage, not a
   // new blanket auto-refresh listener.
   else if (msg.type === "fsc-refresh-manifest-selection") handled = recalculateManifestSelection();
-  else if (msg.type === "fsc-open-dashboard") handled = handleOpenDashboard();
+  else if (msg.type === "fsc-set-assembler-count") handled = handleSetAssemblerCount(msg.itemName, msg.count);
+  else if (msg.type === "fsc-open-dashboard") handled = handleOpenDashboard(typeof msg.tab === "string" ? msg.tab : null);
   else return undefined;
   // sendResponse() itself can throw if the sender's port is already gone
   // (e.g. the game tab got closed in the moment between sending this and

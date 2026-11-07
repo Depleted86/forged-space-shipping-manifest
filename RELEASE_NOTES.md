@@ -2,6 +2,37 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 4.2 (prepared 2026-11-07)
+
+### Release notes (public)
+
+- **Manifest Setup window.** New players get a small "Manifest Setup" checklist on the game page listing every screen to visit (Commercial Storage, Skills, a Blueprint Store, Assembly Facility...) and each step ticks itself off once the extension has read it. Drag it anywhere, minimise it, or skip it; the dashboard's About tab can show it again. Players updating from an earlier version don't see it unless they ask for it.
+- **Clearer blueprint lists.** Every blueprint dropdown (the Manifest overlay, Plan a Build, the Blueprints tab) is now:
+  - grouped by store and type ("Blueprints › Systems") - pick a type in a store's filter once and its blueprints are filed under it;
+  - sorted by the Manufacturing Skill needed (Captain level for ships);
+  - marked 🟢 when you meet the requirement and 🔴 when you don't - Manufacturing Skill for blueprints, Captain level for ships - with "MFG Req needed/yours" or "Captain Lvl Req needed/yours" on hover;
+  - marked 👁 when a blueprint has only been seen in a store's list, not opened, so its materials aren't saved yet.
+- **Assemblers per item.** Each Assembly item in the Manifest overlay has an "Asm:" box for how many Assemblers you have making it, and its time is shared between them (39 runs on 2 Assemblers shows 20.0h). Plan a Build shows the same times, and the counts travel with Export/Import.
+- **Refresh reminder each session.** When you start playing, a small "Refresh your data" window reminds you to open Commercial Storage and Skills, ticks each off as you do, and closes by itself. Turn it off under Settings → Reminders.
+- Fixed: after changing a store's filters, a blueprint is only saved once it's one of the blueprints listed - the previously open one isn't re-saved, and filtering down to nothing no longer warns that the store can't be read.
+- The welcome page now takes new players straight to the game.
+
+### Notes for reviewers (private)
+
+Update to 4.1.1 (live). No permission changes: still just `storage` and the single host permission for `https://forgedspace.com/*`. Still no network requests of any kind; all data stays in `browser.storage.local`.
+
+**Worth a direct look:**
+
+- **New in-page windows (`js/overlay-setup.js`, steps in `js/setup-steps.js`).** A setup checklist, and a per-session "Refresh your data" reminder, drawn in their own Shadow DOM host (`#fsc-setup-panel-host`), separate from the game's DOM, like the existing Manifest overlay. The reminder is driven by the same reads `content.js` already does (storage list, Skills window, top bar); it adds no new page reads. It only reads `browser.storage.local`; its text is set via `textContent`. Its "Open … tab" buttons send the existing `fsc-open-dashboard` message, now with an optional tab name, and `background.js` opens `dashboard.html#<tab>`. Both files are added to `web_accessible_resources` so `content.js` can import them like the overlay's other modules.
+- **Store type filter (`content.js`, `storeTypeFilter()`).** Reads which option the store's own type `<select>` currently has selected (`selectedIndex` / option `textContent`) to label the listed blueprints' type. Read-only: the extension never changes the filter or any other page element.
+- **Assembler counts** are typed into a small text box on each Assembly row of the existing overlay and saved to `settings` via a new `fsc-set-assembler-count` message to `background.js` (same pattern as the Farm/Buy select). Display-only: no page reads or writes.
+- **`runtime.onInstalled` with reason "update"** now also hides the setup window for players updating from before 4.2 (a `browser.storage.local` write only).
+- **Welcome page** button now navigates its own tab to `https://forgedspace.com/` (a plain link; no API calls).
+
+Everything else - dropdown grouping, sorting and markers, and skipping empty filtered store lists - is UI and logic in the existing dashboard tabs, overlay and content script.
+
+**Re: the "Unsupported /background/service_worker manifest property is ignored by Firefox" warning**, if it appears again: expected and unchanged since v3.1. The Chrome/Edge packages drop `scripts` and `browser_specific_settings`.
+
 ## 4.1.1 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-06; Edge and Firefox live 2026-11-06, Chrome live 2026-11-07)
 
 ### Release notes (public)

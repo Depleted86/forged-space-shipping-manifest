@@ -50,6 +50,13 @@ export const DEFAULT_SETTINGS = {
   // The player's Engineering skill, read from the Character Skills window -
   // compared with a module blueprint's store.engReq (needed to fit it).
   engineering_skill: null,
+  // Each new game session, remind the player to open Commercial Storage and
+  // Skills so they're current (js/overlay-setup.js). Turned off in Settings.
+  session_reminder: true,
+  // { commodityName: n } - how many Assemblers the player has making each
+  // Assembly item, set in the Manifest overlay. Shares the item's one-hour
+  // runs between them for its time estimate (assemblyHoursWith()).
+  assembler_counts: {},
 };
 
 const KEYS = {
@@ -76,6 +83,7 @@ const KEYS = {
   manifestCorpToMineData: "manifestCorpToMineData",
   manifestPendingBatches: "manifestPendingBatches",
   buildLabels: "buildLabels",
+  gettingStarted: "gettingStarted",
 };
 
 // Pre-2026-08-15 key names, from before Recipe/AssemblyRecipe were renamed
@@ -468,4 +476,16 @@ export async function loadBuildLabels() {
 
 export async function saveBuildLabels(labels) {
   await setKey(KEYS.buildLabels, labels);
+}
+
+// The in-game "Manifest Setup" window (js/overlay-setup.js): whether the
+// player skipped it (or the About tab asked to show it again), where it was
+// left and whether it's minimised, and whether the Manifest overlay has ever
+// been opened - the one step with nothing else saved to show for it.
+export async function loadGettingStarted() {
+  return { dismissed: false, overlayOpened: false, ...(await getKey(KEYS.gettingStarted, {})) };
+}
+
+export async function saveGettingStarted(state) {
+  await setKey(KEYS.gettingStarted, state);
 }

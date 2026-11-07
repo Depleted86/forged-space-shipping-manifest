@@ -107,10 +107,11 @@ export function initSettingsTab(app, container) {
     if (conflicts.choices.length > 0) {
       const mine = current.settings || {};
       const theirs = blob.settings || {};
-      const describe = (settings, item) => [settings.ore_choices?.[item], settings.item_acquisition_mode?.[item]].filter(Boolean).join(", ");
+      const describe = (settings, item) =>
+        [settings.ore_choices?.[item], settings.item_acquisition_mode?.[item], settings.assembler_counts?.[item] ? `${settings.assembler_counts[item]} assemblers` : null].filter(Boolean).join(", ");
       replace.choices = await askAllowSkip(
-        "Ore and buy/craft choices",
-        "The imported file changes your ore or buy/craft choices for these items.",
+        "Ore, buy/craft and assembler choices",
+        "The imported file changes your ore, buy/craft or assembler choices for these items.",
         conflicts.choices.map((item) => `${item}: yours ${describe(mine, item) || "-"}, file ${describe(theirs, item) || "-"}`)
       );
     }
@@ -209,6 +210,15 @@ export function initSettingsTab(app, container) {
     setTimeout(() => location.reload(), 800);
   }
 
+  // The in-game "Refresh your data" reminder each new session (see
+  // js/overlay-setup.js) - saved straight away, like every other setting.
+  const reminderCheckbox = el("input", { type: "checkbox", id: "session-reminder" });
+  reminderCheckbox.checked = app.settings.session_reminder !== false;
+  reminderCheckbox.addEventListener("change", async () => {
+    app.settings.session_reminder = reminderCheckbox.checked;
+    await storage.saveSettings(app.settings);
+  });
+
   // Cargo/Ore Hold read from the game's HUD - see dashboard.js's
   // storage.onChanged listener.
   app.refreshHooks.settingsFields = refreshShipInfo;
@@ -219,6 +229,9 @@ export function initSettingsTab(app, container) {
       el("h3", { class: "section-title", text: "Your ship" }),
       shipInfo,
       el("div", { class: "hint", text: "Read from the game's top bar while it's open - switching ships updates these. Mining trips use the Ore Hold when your ship has one, otherwise cargo." }),
+      el("h3", { class: "section-title", text: "Reminders" }),
+      el("div", { class: "field-row" }, [reminderCheckbox, el("label", { for: "session-reminder", text: "Remind me to refresh storage and skills each session" })]),
+      el("div", { class: "hint", text: "When you start playing, a small window on the game page lists Commercial Storage and Skills, and ticks each off once it's been opened." }),
       el("h3", { class: "section-title", text: "Move to another browser or PC" }),
       el("div", { class: "hint", text: "Save your blueprints, assembly plans, builds (including corp builds), harvester slots and planet types to a file, then import it in the extension on the other browser or PC. Importing adds to what's already there, and blueprints already read from the game there are kept. If the file would change your harvester settings or ore/buy choices, you're asked first." }),
       el("div", { class: "toolbar" }, [

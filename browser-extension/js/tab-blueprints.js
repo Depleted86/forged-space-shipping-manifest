@@ -6,7 +6,7 @@
 // materials yet just says which store to open it in.
 
 import { el, clear } from "./dom-helpers.js";
-import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint } from "./calc-engine.js";
+import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, blueprintSkillTooLow, markRequirements, BLUEPRINT_LIST_LEGEND } from "./calc-engine.js";
 import * as storage from "./storage.js";
 
 export function initBlueprintsTab(app, container) {
@@ -22,6 +22,7 @@ export function initBlueprintsTab(app, container) {
   // The player's skills and Captain level, as last read from the game
   // (Character Skills window / HUD) - shown, not editable.
   const skillsInfo = el("div", { class: "hint" });
+  const knownCount = el("div", { class: "hint" });
   function refreshSkillsInfo() {
     const show = (n) => n ?? "?";
     skillsInfo.textContent = `Your Manufacturing ${show(app.settings.manufacturing_skill)}, Engineering ${show(app.settings.engineering_skill)}, Captain level ${show(app.settings.captain_level)} - read from the game's Character Skills window and top bar.`;
@@ -47,24 +48,14 @@ export function initBlueprintsTab(app, container) {
   }
 
   // Above the player's Captain level (read from the game's HUD).
-  function captainTooLow(blueprint) {
-    const have = app.settings.captain_level;
-    return blueprint.captainLevel != null && have != null && blueprint.captainLevel > have;
-  }
-
   // Too high for the player's Manufacturing Skill (when both are known) -
   // the game sells these, but they can't be run until the skill catches up.
   function skillTooLow(blueprint) {
-    const need = blueprint.store?.mfgSkill;
-    const have = app.settings.manufacturing_skill;
-    return need != null && have != null && need > have;
+    return blueprintSkillTooLow(blueprint, app.settings.manufacturing_skill);
   }
 
   // Short tag for the list, so unowned/recipe-less blueprints stand out.
   function listTag(blueprint) {
-    if (skillTooLow(blueprint)) return " [skill too low]";
-    if (captainTooLow(blueprint)) return " [captain level too low]";
-    if (!blueprint.hasRecipe()) return " [no recipe yet]";
     if (blueprint.store && !blueprint.store.owned) return " [not owned]";
     return "";
   }
@@ -120,19 +111,20 @@ export function initBlueprintsTab(app, container) {
     const inClass = (name) => inShipClass(app.blueprints[name], classFilter.value);
     // Sorted by Manufacturing Skill needed (unknown last), then name, with
     // the skill shown up front so a too-high one is obvious before buying.
-    const skillOf = (name) => app.blueprints[name].store?.mfgSkill ?? Infinity;
-    const names = Object.keys(app.blueprints).filter(inClass).sort((a, b) => skillOf(a) - skillOf(b) || a.localeCompare(b));
+    const names = sortBlueprintNamesBySkill(Object.keys(app.blueprints).filter(inClass), app.blueprints);
     // Grouped by the store each came from (Blueprints, Ships, ...).
     for (const [group, groupNames] of groupBlueprintNames(names, app.blueprints)) {
       const optgroup = el("optgroup", { label: group });
       for (const name of groupNames) {
-        const skill = app.blueprints[name].store?.mfgSkill;
-        const prefix = skill != null ? `[Mfg ${skill}] ` : "[Mfg ?] ";
-        optgroup.appendChild(el("option", { value: name, text: prefix + name + listTag(app.blueprints[name]), selected: name === viewingBlueprint ? "" : undefined }));
+        const option = el("option", { value: name, text: blueprintOptionLabel(name, app.blueprints[name]) + listTag(app.blueprints[name]), selected: name === viewingBlueprint ? "" : undefined });
+        optgroup.appendChild(markRequirements(option, app.blueprints[name], app.settings));
       }
       blueprintSelect.appendChild(optgroup);
     }
     blueprintSelect.value = viewingBlueprint || "";
+    const all = Object.values(app.blueprints);
+    const withMaterials = all.filter((bp) => bp.hasRecipe()).length;
+    knownCount.textContent = all.length ? `${withMaterials} of ${all.length} blueprints have their materials saved.` : "";
   }
 
   // Everything about the viewed blueprint - name, requirements, store and
@@ -176,6 +168,8 @@ export function initBlueprintsTab(app, container) {
         el("div", { class: "field-row" }, [classFilterLabel, classFilter]),
         blueprintSelectLabel,
         blueprintSelect,
+        knownCount,
+        el("div", { class: "hint", text: BLUEPRINT_LIST_LEGEND }),
         el("div", { class: "toolbar" }, [el("button", { class: "danger", text: "Delete", onclick: deleteBlueprint })]),
       ]),
       el("div", { class: "detail-panel" }, [

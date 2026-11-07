@@ -15,7 +15,7 @@
 // headless recalculation - see recalculateActiveBuildToMineData() there.
 
 import { el, clear, selectableRow, enableInlineAutocomplete, formatHours } from "./dom-helpers.js";
-import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint } from "./calc-engine.js";
+import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, markRequirements, assemblyHoursWith, BLUEPRINT_LIST_LEGEND } from "./calc-engine.js";
 import * as storage from "./storage.js";
 import { applyLocalPendingDeduction } from "./tab-inventory.js";
 
@@ -303,9 +303,12 @@ export function initPlanTab(app, container) {
     const picked = blueprintSelect.value;
     clear(blueprintSelect);
     blueprintSelect.appendChild(el("option", { value: "", text: "-- Select blueprint --" }));
-    const names = Object.keys(app.blueprints).filter((name) => inShipClass(app.blueprints[name], blueprintClassSelect.value)).sort();
+    const names = sortBlueprintNamesBySkill(
+      Object.keys(app.blueprints).filter((name) => inShipClass(app.blueprints[name], blueprintClassSelect.value)),
+      app.blueprints
+    );
     for (const [group, groupNames] of groupBlueprintNames(names, app.blueprints)) {
-      blueprintSelect.appendChild(el("optgroup", { label: group }, groupNames.map((name) => el("option", { value: name, text: name }))));
+      blueprintSelect.appendChild(el("optgroup", { label: group }, groupNames.map((name) => markRequirements(el("option", { value: name, text: blueprintOptionLabel(name, app.blueprints[name]) }), app.blueprints[name], app.settings))));
     }
     if ([...blueprintSelect.options].some((o) => o.value === picked)) blueprintSelect.value = picked;
   }
@@ -507,7 +510,7 @@ export function initPlanTab(app, container) {
             ])
           );
         } else {
-          const hours = assemblyHours[name];
+          const hours = assemblyHoursWith(assemblyHours[name], (app.settings.assembler_counts || {})[name]);
           const hoursText = hours != null ? formatHours(hours) : "rate unknown";
           // Still planned (so players can plan ahead), but flagged - the
           // Assembler won't take this plan until it's researched.
@@ -594,7 +597,7 @@ export function initPlanTab(app, container) {
       return `${(obj.planetTypes || []).map((p) => p.name).join(", ")} (${rate}/hr, ${hoursText})`;
     }
     if (name in result.assemblyHours) {
-      const h = result.assemblyHours[name];
+      const h = assemblyHoursWith(result.assemblyHours[name], (app.settings.assembler_counts || {})[name]);
       return `Assembly (${h !== null ? h.toFixed(1) + "h" : "rate unknown"})`;
     }
     if (name in result.unresolved) {
@@ -905,6 +908,7 @@ export function initPlanTab(app, container) {
       syncStatus,
       el("h3", { class: "section-title", text: "Add to plan" }),
       el("div", { class: "toolbar" }, [blueprintClassLabel, blueprintClassSelect, blueprintSelectLabel, blueprintSelect, blueprintQtyLabel, blueprintQtyInput, el("button", { text: "Add Blueprint to Plan", onclick: addBlueprintToPlan })]),
+      el("div", { class: "hint", text: BLUEPRINT_LIST_LEGEND }),
       el("div", { class: "toolbar" }, [materialLabel, materialInput, materialQtyLabel, materialQtyInput, el("button", { text: "Add Item to Plan", onclick: addMaterialToPlan })]),
       itemDatalist,
       el("h3", { class: "section-title", text: "Plan items" }),
