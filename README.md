@@ -56,7 +56,13 @@ Pull Request describing what changed is genuinely useful (see below).
 
 ## Installing
 
-To load it locally:
+Install it from your browser's extension store:
+
+- **Firefox**: https://addons.mozilla.org/en-US/firefox/addon/forged-space-shipping-manifest/
+- **Edge**: https://microsoftedge.microsoft.com/addons/detail/jfhlioekedclgpogjgdjaadidfibidid
+- **Chrome**: https://chromewebstore.google.com/detail/forged-space-shipping-man/mackeonbhankbkndaiikhjannmokiplc
+
+To load it locally instead (for development):
 
 - **Firefox**: go to `about:debugging#/runtime/this-firefox`, click "Load
   Temporary Add-on…", and select `browser-extension/manifest.json`. This
