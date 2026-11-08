@@ -2,7 +2,7 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
-## 4.2 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-07)
+## 4.2 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-07; live on Firefox, Chrome and Edge 2026-11-07)
 
 ### Release notes (public)
 
