@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 import { Catalog } from "../js/catalog.js";
-import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown, mergeTransferData, transferConflicts, Blueprint, blueprintOptionLabel, sortBlueprintNamesBySkill, groupBlueprintNames, markRequirements, assemblyHoursWith } from "../js/calc-engine.js";
+import { Inventory, planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, AssemblyPlan, itemResourceBreakdown, mergeTransferData, transferConflicts, Blueprint, blueprintOptionLabel, sortBlueprintNamesBySkill, groupBlueprintNames, markRequirements, assemblyHoursWith, assemblersFor } from "../js/calc-engine.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const fixtures = JSON.parse(readFileSync(join(__dirname, "fixtures.json"), "utf8"));
@@ -424,6 +424,36 @@ test("assemblyHoursWith: runs shared between Assemblers, rounded up to whole run
   assert.equal(assemblyHoursWith(39, 3), 13);
   assert.equal(assemblyHoursWith(16, 5), 4);
   assert.equal(assemblyHoursWith(null, 2), null);
+});
+
+test("AssemblyPlan.materialCut: a Global Research boost cuts full amounts the way the game rounds them", () => {
+  // Full -> shown with "Assembler Efficiency -30% materials", read off the
+  // game's cards (Hull Frames, Sentry Turret Mk3, Circuit Boards, Salvage
+  // Drone Mk1).
+  const seen = [[22, 15], [33, 23], [17, 12], [14, 10], [153, 107], [95, 67], [118, 83], [110, 77], [8, 6], [2, 1], [1, 1]];
+  const plan = new AssemblyPlan("Test", 8);
+  seen.forEach(([full], i) => plan.setRequirement(`M${i}`, full));
+  plan.materialCut = 0.3;
+  const cut = plan.effectiveRequirements();
+  seen.forEach(([, shown], i) => assert.equal(cut[`M${i}`], shown, `M${i}`));
+  // Uncut, the saved amounts are used as they are.
+  plan.materialCut = 0;
+  assert.equal(plan.effectiveRequirements().M0, 22);
+
+  // And expansion uses the cut amounts: 3,074 Hull Frames at 8/hr is 385 runs.
+  const hull = new AssemblyPlan("Hull Frames", 8);
+  hull.setRequirement("Iron Ore", 33);
+  hull.materialCut = 0.3;
+  const catalog = new Catalog();
+  assert.equal(expandCommodities(catalog, { "Hull Frames": 3074 }, { "Hull Frames": hull }, new Inventory()).expanded["Iron Ore"], 385 * 23);
+});
+
+test("assemblersFor: unknown until Info > Assemblers is read, then missing means none", () => {
+  assert.equal(assemblersFor({ assembler_counts: { "Hull Frames": 2 } }, "Hull Frames"), null);
+  const read = { assembler_counts: { "Hull Frames": 2 }, assembler_counts_read: true };
+  assert.equal(assemblersFor(read, "Hull Frames"), 2);
+  assert.equal(assemblersFor(read, "Quantum Processors"), 0);
+  assert.equal(assemblyHoursWith(39, null), 39);
 });
 
 test("mergeTransferData: assembler counts travel with the hand-set settings", () => {

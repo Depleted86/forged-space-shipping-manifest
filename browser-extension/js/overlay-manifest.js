@@ -18,7 +18,7 @@
 // port of the old popup.js: same data (manifestToMineData/manifestCorpToMineData
 // from browser.storage.local, which content scripts already have direct
 // access to - no messaging round trip needed just to read/write it), same
-// suppress-while-editing-a-batch-input guard, same section/sub-label
+// suppress-while-editing-an-input guard, same section/sub-label
 // grouping. Only the window-sizing math (resizeToFit()/performResize()) is
 // gone - there's no OS window to size here, just a CSS box.
 
@@ -26,7 +26,7 @@ import { openAddToBuildModal } from "./overlay-blueprint-modal.js";
 import { Catalog } from "./catalog.js";
 import * as storage from "./storage.js";
 import { formatHours } from "./dom-helpers.js";
-import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, markRequirements, assemblyHoursWith } from "./calc-engine.js";
+import { blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, markRequirements, assemblyHoursWith, assemblersFor } from "./calc-engine.js";
 
 const MAX_Z_INDEX = 2147483647; // largest valid CSS z-index - guarantees this paints above anything the game's own page sets, regardless of its own stacking contexts
 
@@ -102,9 +102,9 @@ let blueprints = {}; // blueprintName -> Blueprint, mirrors storage.js's `bluepr
 // from Character Skills and the top bar) - blueprints needing more are
 // marked in the dropdowns (markRequirements()).
 let playerLevels = { manufacturing_skill: null, captain_level: null };
-// { commodityName: n } Assemblers making each Assembly item (settings.
-// assembler_counts) - set in each Assembly row's "Asm:" box.
-let assemblerCounts = {};
+// The settings assemblersFor() reads (assembler_counts and whether Info >
+// Assemblers has been read yet) - shown in each Assembly row's "Asm".
+let assemblerSettings = {};
 let buildLabels = {}; // buildId -> custom display name, mirrors storage.js's `buildLabels` key
 let manifestSelection = null; // { type: "build"|"blueprint", name: string } | null - see storage.js
 let manifestCorpSelection = null; // Corp-view counterpart - { type: "build"|"blueprint", name: string } | null, see storage.js's manifestCorpSelection
@@ -480,9 +480,9 @@ const STYLE = `
   }
   .fsc-batch-controls {
     flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    gap: 4px;
+    font-size: 11px;
+    color: #94a3b8;
+    white-space: nowrap;
   }
   .fsc-batch-label {
     font-size: 11px;
@@ -502,11 +502,6 @@ const STYLE = `
   .fsc-batch-input:focus {
     outline: none;
     border-color: #22d3ee;
-  }
-  .fsc-batch-remaining {
-    font-size: 11px;
-    color: #94a3b8;
-    white-space: nowrap;
   }
   .fsc-row-controls {
     flex: 0 0 auto;
@@ -602,9 +597,9 @@ export function initManifestOverlay() {
         refreshSelectionSelector();
         refreshCorpSelectionSelector();
       }
-      const counts = next.assembler_counts || {};
-      if (JSON.stringify(counts) !== JSON.stringify(assemblerCounts)) {
-        assemblerCounts = counts;
+      const counts = { assembler_counts: next.assembler_counts || {}, assembler_counts_read: !!next.assembler_counts_read };
+      if (JSON.stringify(counts) !== JSON.stringify(assemblerSettings)) {
+        assemblerSettings = counts;
         changed = true;
       }
     }
@@ -634,7 +629,7 @@ export function initManifestOverlay() {
     storage.loadSettings(),
   ]).then(([result, loadedBuilds, loadedBlueprints, loadedBuildLabels, loadedSettings]) => {
     playerLevels = { manufacturing_skill: loadedSettings.manufacturing_skill ?? null, captain_level: loadedSettings.captain_level ?? null };
-    assemblerCounts = loadedSettings.assembler_counts || {};
+    assemblerSettings = { assembler_counts: loadedSettings.assembler_counts || {}, assembler_counts_read: !!loadedSettings.assembler_counts_read };
     personalData = result.manifestToMineData || { available: false };
     corpData = result.manifestCorpToMineData || { available: false, items: [], refined: [] };
     manifestSelection = result.manifestSelection || null;
@@ -769,10 +764,9 @@ function buildPanel() {
   });
 
   // "Mark Complete" - declares the currently-selected Blueprint/Build Order
-  // done: clears ITS OWN batch counts and ore-source picks (see storage.js's
-  // manifestPendingBatches/manifestOreChoices) and deselects, so a finished
-  // print doesn't leave stale numbers/settings behind for the next one that
-  // happens to share an ore. Deliberately never deletes the underlying
+  // done: clears ITS OWN ore-source picks (see storage.js's
+  // manifestOreChoices) and deselects, so a finished print doesn't leave
+  // stale settings behind for the next one. Deliberately never deletes the underlying
   // Blueprint or Build Order - only the dashboard's own "Mark Build
   // Complete" (tab-plan.js) does that, and on purpose stays a separate,
   // more deliberate action. Only meaningful for Personal Farm (batches/ore
@@ -1250,15 +1244,6 @@ function emptyMessage() {
   return "Nothing left to mine";
 }
 
-// Scoped to whichever Blueprint/Build Order is currently selected (see
-// storage.js's manifestPendingBatches comment) - deliberately a different
-// message/storage key than the dashboard's global pendingRefining-backed
-// batch controls, so a batch started here for one selection never silently
-// credits a different selection's own "how many more do I need" math.
-function setPendingBatches(oreName, batches) {
-  browser.runtime.sendMessage({ type: "fsc-set-manifest-pending-batches", oreName, batches }).catch(() => {});
-}
-
 // Row-level "focus" click - see focusedItem's own declaration comment.
 // Shared by all 5 focusable row types (ore/refined/assembly/planetary/buy).
 // Toggling (not just setting) is what makes "click the same row again"
@@ -1312,56 +1297,17 @@ function renderPersonalRow(ore) {
   return row;
 }
 
-// "[typed X] / remaining" batch-tracking control. X is an editable count of
-// batches currently started (typed in directly, not incremented - matches
-// the real workflow: type the count when a run starts, reset to 0 once
-// collected). "remaining" is a static number - how many MORE batches are
-// still needed, counting only what's actually been collected.
+// "Active batches: 50 / 1179" - how many batches of this ore are refining
+// right now, at any refinery (counted from the game's Refining Center and
+// Info > Refining - one shared bucket, see background.js's
+// handleRefiningJobs()) over how many it still needs. Read-only: the game is
+// the only source.
 function buildBatchControls(name, pendingBatches, remainingBatches) {
   const controls = document.createElement("span");
   controls.className = "fsc-batch-controls";
-
-  const batchLabel = document.createElement("span");
-  batchLabel.className = "fsc-batch-label";
-  batchLabel.textContent = "Batch:";
-
-  const batchInput = document.createElement("input");
-  batchInput.type = "text";
-  batchInput.className = "fsc-batch-input";
-  batchInput.setAttribute("aria-label", `Batches of ${name} currently started refining`);
-  batchInput.value = String(pendingBatches);
-  const digits = Math.max(2, String(remainingBatches).length, String(pendingBatches).length);
-  batchInput.style.width = `calc(${digits}ch + 6px)`;
-  batchInput.title = `Batches of ${name} currently started refining (not yet collected) - type a number and press Enter/click away to save`;
-  const commit = () => {
-    const batches = parseInt(batchInput.value, 10);
-    if (Number.isNaN(batches) || batches < 0) {
-      batchInput.value = String(pendingBatches);
-      return;
-    }
-    setPendingBatches(name, batches);
-  };
-  batchInput.addEventListener("click", (e) => e.stopPropagation());
-  batchInput.addEventListener("mousedown", (e) => e.stopPropagation());
-  batchInput.addEventListener("focus", () => { suppressRenderWhileEditing = true; });
-  batchInput.addEventListener("blur", () => {
-    suppressRenderWhileEditing = false;
-    commit();
-    render();
-  });
-  batchInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      batchInput.blur();
-    }
-  });
-
-  const remainingLabel = document.createElement("span");
-  remainingLabel.className = "fsc-batch-remaining";
-  remainingLabel.textContent = `/ ${remainingBatches}`;
-  remainingLabel.title = `${remainingBatches} total batch(es) of ${name} still needed, counting only what's actually been collected - starting more batches (left number) doesn't reduce this until they're actually collected`;
-
-  controls.append(batchLabel, batchInput, remainingLabel);
+  const active = Math.round(pendingBatches * 10) / 10;
+  controls.textContent = `Active batches: ${active.toLocaleString()} / ${remainingBatches.toLocaleString()}`;
+  controls.title = `${active} batch(es) of ${name} refining right now (all your refineries), of ${remainingBatches} still needed. Counted from the game: open the Refining Center or Info → Refining. The needed number only drops once refined output is collected.`;
   return controls;
 }
 
@@ -1504,60 +1450,42 @@ function renderAssemblyRow(item) {
   const row = document.createElement("div");
   row.addEventListener("click", () => toggleFocus("assembly", item.name));
   row.className = "fsc-row fsc-assembly-row fsc-row-flex fsc-row-clickable";
-  const assemblers = assemblerCounts[item.name] || 1;
+  const assemblers = assemblersFor(assemblerSettings, item.name);
   const hours = assemblyHoursWith(item.hours, assemblers);
-  const hoursText = hours != null ? formatHours(hours) : "rate unknown";
+  const hoursText = assemblers === 0 ? "idle" : hours != null ? formatHours(hours) : "rate unknown";
   const label = document.createElement("span");
   label.textContent = `${item.name}: ${Math.round(item.need).toLocaleString()} (${hoursText})`;
-  label.title = assemblers > 1 ? `${label.textContent} with ${assemblers} Assemblers` : label.textContent;
+  label.title = assemblers === 0 ? `${label.textContent} - no Assembler is making it` : assemblers > 1 ? `${label.textContent} with ${assemblers} Assemblers` : label.textContent;
   const controls = document.createElement("span");
   controls.className = "fsc-row-controls";
+  if (item.discount) controls.append(buildDiscountMark(item.discount));
   controls.append(buildAssemblerControl(item.name, assemblers), renderModeSelect(item.name, "mine"));
   row.append(label, controls);
   return row;
 }
 
-// The "Asm:" box on an Assembly row: how many Assemblers are making this
-// item, which shares its runs between them for the time shown. Edited like
-// the refining Batch box - saved on Enter or clicking away, with renders
-// held off while typing so the box isn't rebuilt under the cursor.
+// "−30%" on an Assembly row while a Global Research boost is cutting every
+// recipe's materials (AssemblyPlan.materialCut) - such boosts run out.
+function buildDiscountMark(discount) {
+  const mark = document.createElement("span");
+  mark.className = "fsc-batch-controls";
+  const pct = Math.round(discount * 100);
+  mark.textContent = `−${pct}%`;
+  mark.title = `Materials cut ${pct}% by a Global Research boost (the Assembly Facility's "Assembler Efficiency" badge). Taken off by itself the next time you're in the Assembly Facility after the boost ends.`;
+  return mark;
+}
+
+// "Asm 3" on an Assembly row: how many Assemblers are making this item,
+// from the game's Info > Assemblers tab - "?" until that's been read.
 function buildAssemblerControl(itemName, assemblers) {
   const wrap = document.createElement("span");
   wrap.className = "fsc-batch-controls";
-  const label = document.createElement("span");
-  label.className = "fsc-batch-label";
-  label.textContent = "Asm:";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.inputMode = "numeric";
-  input.className = "fsc-batch-input";
-  input.style.width = "calc(2ch + 6px)";
-  input.value = String(assemblers);
-  input.setAttribute("aria-label", `Assemblers making ${itemName}`);
-  input.title = `How many Assemblers are making ${itemName} - the time is shared between them. Type a number and press Enter or click away to save.`;
-  const commit = () => {
-    const count = parseInt(input.value, 10);
-    if (Number.isNaN(count) || count < 1) {
-      input.value = String(assemblers);
-      return;
-    }
-    if (count !== assemblers) browser.runtime.sendMessage({ type: "fsc-set-assembler-count", itemName, count }).catch(() => {});
-  };
-  input.addEventListener("click", (e) => e.stopPropagation());
-  input.addEventListener("mousedown", (e) => e.stopPropagation());
-  input.addEventListener("focus", () => { suppressRenderWhileEditing = true; });
-  input.addEventListener("blur", () => {
-    suppressRenderWhileEditing = false;
-    commit();
-    render();
-  });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      input.blur();
-    }
-  });
-  wrap.append(label, input);
+  wrap.textContent = `Asm ${assemblers === null ? "?" : assemblers}`;
+  wrap.title = assemblers === null
+    ? `Open Info → Assemblers in the game to see how many Assemblers are making ${itemName} (timed as 1 until then).`
+    : assemblers === 0
+      ? `No Assembler is making ${itemName} (from Info → Assemblers).`
+      : `${assemblers} Assembler(s) making ${itemName} (from Info → Assemblers) - the time is shared between them.`;
   return wrap;
 }
 

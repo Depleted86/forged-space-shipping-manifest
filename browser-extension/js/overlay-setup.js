@@ -278,16 +278,22 @@ export function initSetupPanel() {
 }
 
 // ---- "Refresh your data" reminder ----
-// Storage and skills change between play sessions, and the planner only sees
-// them when those screens are opened. So each time the game page loads, once
-// the player is in the game (content.js calls noteInGame() when the top bar
-// is read), a small window lists both and ticks each off as it's read this
-// session (noteRead()). It closes by itself once both are, or with ×. Never
-// shown while Manifest Setup is (that covers both), when both were read
-// before it got the chance, or with the reminder turned off in Settings.
+// Storage, skills, harvesters, assemblers and refining jobs change between
+// play sessions, and the planner only sees them when those screens are
+// opened (Info > Refining is the one place every refinery's jobs are listed;
+// after it, the Refining Center only keeps its own refinery up to date).
+// So each time the game page loads, once the player is in the game
+// (content.js calls noteInGame() when the top bar is read), a small window
+// lists them and ticks each off as it's read this session (noteRead()). It
+// closes by itself once all are, or with ×. Never shown while Manifest Setup
+// is (that covers them), when all were read before it got the chance, or
+// with the reminder turned off in Settings.
 const REMINDER_ITEMS = [
   { key: "storage", text: "Open Commercial Storage" },
   { key: "skills", text: "Open Skills (Ship Skills tab)" },
+  { key: "harvesters", text: "Open Info → Harvesters" },
+  { key: "assemblers", text: "Open Info → Assemblers" },
+  { key: "refining", text: "Open Info → Refining" },
 ];
 const REMINDER_DONE_MS = 4000;
 const sessionRead = new Set();
@@ -333,7 +339,7 @@ export async function noteInGame() {
   ]);
   reminderList = node("ol");
   const body = node("div", { class: "fss-body" }, [
-    node("div", { class: "fss-where", text: "Storage and skills may have changed since last time - open these so the planner is up to date:" }),
+    node("div", { class: "fss-where", text: "Your storage, skills, harvesters, assemblers and refining may have changed since last time - open these so the planner is up to date:" }),
     reminderList,
   ]);
   reminderList.style.marginTop = "8px";
@@ -355,7 +361,7 @@ export function noteRead(kind) {
   if (reminderState !== "showing") return;
   renderReminderRows();
   if (REMINDER_ITEMS.every((item) => sessionRead.has(item.key))) {
-    reminderPanel.querySelector(".fss-body").replaceChildren(node("div", { class: "fss-allset", role: "status" }, [node("span", { text: "✓ Storage and skills refreshed." })]));
+    reminderPanel.querySelector(".fss-body").replaceChildren(node("div", { class: "fss-allset", role: "status" }, [node("span", { text: "✓ All refreshed." })]));
     setTimeout(closeReminder, REMINDER_DONE_MS);
   }
 }

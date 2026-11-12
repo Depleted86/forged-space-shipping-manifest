@@ -266,12 +266,15 @@ function checkCorpStore() {
 // storage.local write in background.js) when the scraped snapshot actually
 // changed since the last tick, so leaving the storage screen open and idle
 // doesn't write every 2s.
-// The storage screen is on the page, by its title, and shows quantities
-// ("N units") - an empty storage shows none, so it never reads as unreadable.
+// The storage screen is on the page - its "Your storage" list, or its own
+// title bar (.ttl, so a station's "Commercial Storage" service card isn't
+// taken for it) - and shows quantities ("N units"): an empty storage shows
+// none, so it never reads as unreadable. The service card plus a "202 units
+// delivered" turn-in line on the same Promenade used to pass this.
 function storageScreenOpen() {
-  const title = findLeafText("h1, h2, h3, h4, div", STORAGE_PANEL_TITLE);
-  if (!title) return false;
-  const panel = title.closest("[data-panel-open]") || title.parentElement?.parentElement?.parentElement;
+  const list = storageList();
+  const title = [...document.querySelectorAll(".ttl")].find((el) => el.textContent.trim() === STORAGE_PANEL_TITLE);
+  const panel = (list || title)?.closest("[data-panel-open]");
   return !!panel && /\d\s+units?\b/i.test(panel.textContent);
 }
 
@@ -330,6 +333,22 @@ const ASSEMBLER_PANEL_TITLE = "Assembly Facility";
 const ASSEMBLER_RESOURCES_LABEL = /^Required Resources\b/i;
 const ASSEMBLER_POLL_MS = 2000;
 
+// A chip's text without any struck-through part. Once R&D has cut a plan's
+// cost the card shows the old amount struck through right before the new
+// one ("<span class=line-through>22</span>15x White Iron"), and plain
+// textContent runs them together into "2215x White Iron" - which saved
+// recipes ~100x too big. Same line-through markup as the boosted rate above
+// it (see parseRate()). Read-only: works on a detached clone. The struck
+// amount itself is read separately - it's the one saved (see
+// scrapeAssemblerCards()).
+const STRUCK_THROUGH = '.line-through, s, del, strike, [style*="line-through"]';
+function chipText(chip) {
+  if (!chip.querySelector(STRUCK_THROUGH)) return chip.textContent;
+  const copy = chip.cloneNode(true);
+  for (const el of copy.querySelectorAll(STRUCK_THROUGH)) el.remove();
+  return copy.textContent;
+}
+
 // "8x White Iron" -> ["White Iron", 8]
 function parseResourceChip(text) {
   const match = (text || "").trim().match(/^([\d,.]+)\s*x\s+(.+)$/i);
@@ -375,11 +394,18 @@ function scrapeAssemblerCards() {
     const name = card.querySelector("h4").textContent.trim();
     if (!name) continue;
 
+    // The full amounts: during a Global Research boost a chip shows the old
+    // amount struck through before the cut one, and the old one is what's
+    // saved - the cut is applied when planning (AssemblyPlan.materialCut), so
+    // a saved recipe stays right when the boost ends.
     const requirements = {};
     const chipList = label.nextElementSibling;
     for (const chip of chipList ? chipList.children : []) {
-      const parsed = parseResourceChip(chip.textContent);
-      if (parsed) requirements[parsed[0]] = parsed[1];
+      const parsed = parseResourceChip(chipText(chip));
+      if (!parsed) continue;
+      const struck = chip.querySelector(STRUCK_THROUGH);
+      const full = struck ? parseFloat(struck.textContent.replace(/[^\d.]/g, "")) : NaN;
+      requirements[parsed[0]] = full > parsed[1] ? full : parsed[1];
     }
     if (Object.keys(requirements).length === 0) continue;
 
@@ -405,11 +431,38 @@ function scrapeAssemblerCards() {
   return items;
 }
 
+// The Assembly Facility's header badge while a Global Research boost is on
+// ("Assembler Efficiency" / "-30% materials"), on every tab of the
+// Facility, including the Active Assembler Slots tab a player opens anyway to
+// collect output: 0.3, or 0 with the Facility open and no badge - the boost
+// is over. It gives no end date, so this is how the extension learns it
+// started and ended.
+let lastAssemblerBoostSnapshot = null;
+
+function assemblerBoost() {
+  const label = findLeafText("span, div", "Assembler Efficiency");
+  if (!label) return 0;
+  const m = label.parentElement.textContent.match(/-\s*(\d+(?:\.\d+)?)\s*%\s*materials/i);
+  return m ? Number(m[1]) / 100 : 0;
+}
+
+function checkAssemblerBoost() {
+  const discount = assemblerBoost();
+  if (discount === lastAssemblerBoostSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-assembler-boost", discount })
+    .then(() => { lastAssemblerBoostSnapshot = discount; })
+    .catch(() => {});
+}
+
 function checkAssemblerPlans() {
   if (!isAssemblyFacilityOpen()) {
     reportScreenRead("the Assembly Facility's plans", false, false);
     return;
   }
+  checkAssemblerBoost();
   const items = scrapeAssemblerCards();
   // The Facility has other tabs; only its Configure Production list shows plans.
   reportScreenRead("the Assembly Facility's plans", !!findLeafText("h2, h3, h4", "Configure Production"), items.length > 0);
@@ -904,6 +957,272 @@ function checkSkills() {
     .catch(() => {});
 }
 
+// Information Center > Harvesters (the "Info" button): the registry of the
+// player's planetary harvesters - a table row each with its rate ("40
+// units/hr", under the type), the resource it's collecting and its status -
+// and a footer with the slot limit ("Galaxy Limit: 10/10"). Read so the
+// Planets tab's harvester slots fill themselves. Found by the table's
+// column headings, and only inside the window that calls itself the
+// Harvester Registry, since other Information Center tabs (Mining Drones)
+// may use a similar table.
+let lastHarvesterSnapshot = null;
+
+function harvesterRegistry() {
+  for (const table of document.querySelectorAll("table")) {
+    const heads = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+    if (!heads.includes("Type") || !heads.includes("Resource") || !heads.includes("Status")) continue;
+    let panel = table.parentElement;
+    while (panel && !/Galaxy Limit/i.test(panel.textContent)) panel = panel.parentElement;
+    if (!panel || !/Harvester/i.test(panel.textContent)) continue;
+    return { table, heads, panel };
+  }
+  return null;
+}
+
+function scrapeHarvesterRegistry() {
+  const found = harvesterRegistry();
+  if (!found) return null;
+  const typeCol = found.heads.indexOf("Type");
+  const resourceCol = found.heads.indexOf("Resource");
+  const statusCol = found.heads.indexOf("Status");
+  const rows = [...found.table.querySelectorAll("tbody tr")];
+  const harvesters = [];
+  for (const row of rows) {
+    const cells = row.children;
+    // Its own line, matched whole - the cell's text runs the harvester's ID
+    // straight into it ("...LCJ640 units/hr").
+    let rate = null;
+    for (const el of cells[typeCol] ? cells[typeCol].querySelectorAll("*") : []) {
+      rate = el.textContent.trim().match(/^([\d,.]+)\s*units\s*\/\s*hr$/i);
+      if (rate) break;
+    }
+    // The resource cell's first line is the name; "Pool: N units" follows.
+    const resourceEl = cells[resourceCol] ? cells[resourceCol].querySelector("div") : null;
+    const resource = resourceEl ? resourceEl.textContent.trim() : "";
+    const status = cells[statusCol] ? cells[statusCol].textContent.trim() : "";
+    if (!resource || !rate) continue;
+    harvesters.push({ resource, rate: parseFloat(rate[1].replace(/,/g, "")), active: /^Active$/i.test(status) });
+  }
+  const limit = found.panel.textContent.match(/Galaxy Limit:\s*\d+\s*\/\s*(\d+)/i);
+  return { harvesters, limit: limit ? parseInt(limit[1], 10) : null, rowCount: rows.length };
+}
+
+function checkHarvesters() {
+  const scraped = scrapeHarvesterRegistry();
+  reportScreenRead("the Harvesters list", !!scraped && scraped.rowCount > 0, !!scraped && scraped.harvesters.length > 0);
+  if (!scraped || (scraped.rowCount > 0 && scraped.harvesters.length === 0)) return;
+  if (setupWindows) setupWindows.noteRead("harvesters");
+  const snapshot = JSON.stringify([scraped.harvesters, scraped.limit]);
+  if (snapshot === lastHarvesterSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-harvesters-scrape", harvesters: scraped.harvesters, limit: scraped.limit })
+    .then(() => { lastHarvesterSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// Information Center > Assemblers: the Molecular Assembler Registry - a
+// table row per deployed assembler with the "Product" it's making - read so
+// the Manifest overlay's "Asm:" counts (settings.assembler_counts) fill
+// themselves: how many assemblers are making each product. Found the same
+// way as the Harvester Registry above: by the table's column headings, only
+// inside the window whose footer reads "Assembler Registry".
+let lastAssemblerRegistrySnapshot = null;
+
+function assemblerRegistry() {
+  for (const table of document.querySelectorAll("table")) {
+    const heads = [...table.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+    if (!heads.includes("Assembler") || !heads.includes("Product")) continue;
+    let panel = table.parentElement;
+    while (panel && !/Assembler Registry/i.test(panel.textContent)) panel = panel.parentElement;
+    if (!panel) continue;
+    return { table, heads };
+  }
+  return null;
+}
+
+function scrapeAssemblerRegistry() {
+  const found = assemblerRegistry();
+  if (!found) return null;
+  const productCol = found.heads.indexOf("Product");
+  const rows = [...found.table.querySelectorAll("tbody tr")];
+  const counts = {};
+  let read = 0;
+  for (const row of rows) {
+    const cell = row.children[productCol];
+    const product = cell ? cell.textContent.replace(/\s+/g, " ").trim() : "";
+    if (!product) continue;
+    counts[product] = (counts[product] || 0) + 1;
+    read++;
+  }
+  return { counts, read, rowCount: rows.length };
+}
+
+function checkAssemblerRegistry() {
+  const scraped = scrapeAssemblerRegistry();
+  reportScreenRead("the Assemblers list", !!scraped && scraped.rowCount > 0, !!scraped && scraped.read > 0);
+  if (!scraped || (scraped.rowCount > 0 && scraped.read === 0)) return;
+  if (setupWindows) setupWindows.noteRead("assemblers");
+  const snapshot = JSON.stringify(scraped.counts);
+  if (snapshot === lastAssemblerRegistrySnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-assembler-registry-scrape", counts: scraped.counts })
+    .then(() => { lastAssemblerRegistrySnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// Information Center > Refining: every refining job not yet collected, at
+// every refinery. Its footer reads "Material Processing Monitor - N Active
+// Operations"; with no jobs there may be no table at all, so the footer is
+// found first and the table (headings Location / Resource / Input Qty)
+// looked for inside it. Every row counts, finished or not - the output
+// isn't in storage until it's collected, and a collected job leaves the
+// list. background.js matches these against the jobs it already knows (see
+// handleRefiningJobs()).
+let lastRefiningSnapshot = null;
+
+function refiningMonitor() {
+  for (const el of document.querySelectorAll("div")) {
+    if (el.childElementCount > 0) continue;
+    const m = el.textContent.trim().match(/^Material Processing Monitor\s*-\s*(\d+)\s*Active Operations?$/i);
+    if (!m) continue;
+    let panel = el.parentElement;
+    while (panel && !panel.querySelector("table") && !/Information Center/.test(panel.textContent)) panel = panel.parentElement;
+    if (!panel) continue;
+    return { panel, active: Number(m[1]) };
+  }
+  return null;
+}
+
+function scrapeRefining() {
+  const found = refiningMonitor();
+  if (!found) return null;
+  let table = null;
+  let heads = [];
+  for (const t of found.panel.querySelectorAll("table")) {
+    heads = [...t.querySelectorAll("thead th")].map((th) => th.textContent.trim());
+    if (heads.includes("Location") && heads.includes("Resource") && heads.includes("Input Qty")) { table = t; break; }
+  }
+  const rows = table ? [...table.querySelectorAll("tbody tr")] : [];
+  const cell = (row, heading) => {
+    const td = row.children[heads.indexOf(heading)];
+    return td ? td.textContent.trim() : "";
+  };
+  const jobs = [];
+  for (const row of rows) {
+    const refinery = cell(row, "Location");
+    const ore = cell(row, "Resource");
+    const qty = cell(row, "Input Qty").match(/^([\d,]+)$/);
+    if (refinery && ore && qty) jobs.push({ refinery, ore, qty: Number(qty[1].replace(/,/g, "")) });
+  }
+  // The footer's count is every job; a search or a half-drawn table would
+  // show fewer rows, and saving that would count the missing jobs collected.
+  return { jobs, read: jobs.length, rowCount: rows.length, complete: jobs.length === found.active && rows.length === found.active };
+}
+
+function checkRefining() {
+  const scraped = scrapeRefining();
+  reportScreenRead("the Refining list", !!scraped && scraped.rowCount > 0, !!scraped && scraped.read > 0);
+  if (!scraped || !scraped.complete) return;
+  if (setupWindows) setupWindows.noteRead("refining");
+  const snapshot = JSON.stringify(scraped.jobs);
+  if (snapshot === lastRefiningSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-refining-scrape", jobs: scraped.jobs })
+    .then(() => { lastRefiningSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// Refining Center (a station service): the bays of one refinery at a time
+// ("Bays at Cinq Port ..."), each free, running or ready, plus the ores in
+// storage down the left. Each time the bays change, that refinery's running
+// and ready jobs are sent to background.js, which counts any it hasn't seen
+// before - towards the Blueprint/Build the Manifest has open - and treats
+// any it knew that are gone as collected (see handleRefiningJobs()).
+let lastRefineryBaysSnapshot = null;
+let lastRefiningOresSnapshot = null;
+
+function refiningCenter() {
+  for (const ttl of document.querySelectorAll(".ttl")) {
+    if (ttl.textContent.trim() !== "Refining Center") continue;
+    const panel = ttl.closest("[data-panel-open]") || ttl.parentElement.parentElement.parentElement;
+    if (panel) return panel;
+  }
+  return null;
+}
+
+function scrapeRefineryBays(panel) {
+  let refinery = null;
+  for (const el of panel.querySelectorAll(".sect")) {
+    const m = el.textContent.replace(/\s+/g, " ").trim().match(/^Bays at (.+?)\s*·/);
+    if (m) { refinery = m[1]; break; }
+  }
+  const jobs = [];
+  let bays = 0;
+  for (const bay of panel.querySelectorAll(".cruc-grid > div")) {
+    const no = bay.querySelector(".no");
+    if (!no || !/^BAY\s*\d+$/i.test(no.textContent.trim())) continue;
+    bays++;
+    if (bay.classList.contains("free")) continue;
+    const name = bay.querySelector("b");
+    let qty = null;
+    for (const span of bay.querySelectorAll("span")) {
+      qty = span.textContent.trim().match(/^([\d,]+)\s*ore$/i);
+      if (qty) break;
+    }
+    if (!name || !qty) return null; // a bay we can't read - sending the rest would count it collected
+    jobs.push({ refinery, ore: name.textContent.trim(), qty: Number(qty[1].replace(/,/g, "")) });
+  }
+  if (!refinery || bays === 0) return null;
+  return { refinery, jobs };
+}
+
+// The left column's ores and how much of each is in storage ("43,161" over
+// "143 batches") - saved like a filtered storage read, so only these ores
+// are updated. Shows the ore leaving storage the moment a job starts.
+function scrapeRefiningOres(panel) {
+  const list = panel.querySelector('[role="listbox"][aria-label="Your ores"]');
+  if (!list) return [];
+  const items = [];
+  for (const row of list.querySelectorAll('[role="option"]')) {
+    const name = row.querySelector("b");
+    const span = row.querySelector("span");
+    const qty = span && span.firstChild ? span.firstChild.textContent.trim().match(/^([\d,]+)$/) : null;
+    if (name && qty) items.push({ name: name.textContent.trim(), quantity: Number(qty[1].replace(/,/g, "")) });
+  }
+  return items;
+}
+
+function checkRefiningCenter() {
+  const panel = refiningCenter();
+  if (!panel) return;
+  const items = scrapeRefiningOres(panel);
+  const oresSnapshot = JSON.stringify(items);
+  if (items.length > 0 && oresSnapshot !== lastRefiningOresSnapshot) {
+    browser.runtime
+      .sendMessage({ type: "fsc-storage-scrape", items, complete: false })
+      .then(() => { lastRefiningOresSnapshot = oresSnapshot; })
+      .catch(() => {});
+  }
+
+  const scraped = scrapeRefineryBays(panel);
+  reportScreenRead("the Refining Center bays", true, !!scraped);
+  if (!scraped) return;
+  const snapshot = JSON.stringify(scraped);
+  if (snapshot === lastRefineryBaysSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-refinery-bays", refinery: scraped.refinery, jobs: scraped.jobs })
+    .then(() => { lastRefineryBaysSnapshot = snapshot; })
+    .catch(() => {});
+}
+
 // Systems Lexicon: a static reference/help panel ("Quick reference guide
 // for Forged Space gameplay"), not live game state - Manufacturing category,
 // "Planet Types & Resources" topic. Unlike storage/Corp Store/Assembler
@@ -993,6 +1312,10 @@ const pollIntervalIds = [
   setInterval(checkResearchPlans, ASSEMBLER_POLL_MS),
   setInterval(checkBlueprintStore, ASSEMBLER_POLL_MS),
   setInterval(checkSkills, ASSEMBLER_POLL_MS),
+  setInterval(checkHarvesters, ASSEMBLER_POLL_MS),
+  setInterval(checkAssemblerRegistry, ASSEMBLER_POLL_MS),
+  setInterval(checkRefining, ASSEMBLER_POLL_MS),
+  setInterval(checkRefiningCenter, ASSEMBLER_POLL_MS),
   setInterval(checkLexiconPlanets, LEXICON_POLL_MS),
 ];
 

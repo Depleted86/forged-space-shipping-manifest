@@ -184,7 +184,22 @@ export function initPlanetsTab(app, container) {
     renderHarvesterSummary();
   }
 
+  // Filled from the game's Information Center > Harvesters tab (content.js's
+  // scrapeHarvesterRegistry()); the roster can still be edited by hand
+  // until the next read.
+  const harvesterSyncStatus = el("div", { class: "status-text" });
+  async function renderHarvesterSyncStatus() {
+    const meta = await storage.loadHarvesterSyncStatus();
+    harvesterSyncStatus.textContent = meta
+      ? `Harvesters last read from the game ${new Date(meta.syncedAt).toLocaleString()}. Open Info → Harvesters in the game to update them.`
+      : "Open Info → Harvesters in the game and your harvesters fill in here by themselves - or set them by hand below.";
+  }
+
   function renderUsage() {
+    // The game's Galaxy Limit sets the slot count, and could one day pass 10.
+    for (let n = slotCountSelect.options.length + 1; n <= app.maxHarvesters; n++) {
+      slotCountSelect.appendChild(el("option", { value: String(n), text: String(n) }));
+    }
     const used = app.harvesterSlots.filter((s) => s && s.resource).length;
     usageLabel.textContent = `${used} / ${app.maxHarvesters} harvester slots assigned`;
     rosterTitle.textContent = `Harvesters (${app.maxHarvesters} max at a time)`;
@@ -201,6 +216,7 @@ export function initPlanetsTab(app, container) {
       el("div", { class: "toolbar" }, [resourceSelectLabel, resourceSelect]),
       summaryLabel,
       rosterTitle,
+      harvesterSyncStatus,
       el("div", { class: "field-row" }, [
         el("label", { for: "harvester-slot-count", text: "Harvester slots owned:" }),
         slotCountSelect,
@@ -215,10 +231,12 @@ export function initPlanetsTab(app, container) {
   renderRoster();
   renderUsage();
   renderPlanetSyncStatus();
+  renderHarvesterSyncStatus();
 
   app.refreshHooks.planets = () => {
     renderRoster();
     renderUsage();
+    renderHarvesterSyncStatus();
     renderHarvesterSummary();
     // The three below only matter after a Systems Lexicon scrape actually
     // changed app.catalog's planet data - harmless (and cheap) to also run

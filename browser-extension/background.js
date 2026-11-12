@@ -350,6 +350,22 @@ async function recalculateActiveBuildToMineData() {
 // present in the scraped ingredient list are pruned, so a plan stays in
 // sync if Coops changes it in a future update rather than silently
 // accumulating stale entries.
+// discount: the Assembly Facility's "Assembler Efficiency -30% materials"
+// badge (content.js's assemblerBoost()) - 0.3, or 0 when the Facility is
+// open without it. Saved as settings.assembler_boost, which every plan's cut
+// is worked out from (AssemblyPlan.materialCut), so every pipeline is re-run.
+async function handleAssemblerBoost(discount) {
+  if (typeof discount !== "number" || discount < 0 || discount >= 1) return;
+  const settings = await storage.loadSettings();
+  if ((Number(settings.assembler_boost) || 0) === discount) return;
+  settings.assembler_boost = discount;
+  await storage.saveSettings(settings);
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
 async function handleAssemblerScrape(items) {
   const assemblyPlans = await storage.loadAssemblyPlans();
   for (const item of items || []) {
@@ -494,6 +510,107 @@ function recipeSignature(requirements) {
 // has no Ore Hold), or null when the HUD wasn't on screen. A ship with an
 // Ore Hold mines into it, so its capacity becomes the trip size; otherwise
 // cargo is. Changing ships changes every trip count, so that recalculates.
+// harvesters: [{resource, rate, active}] from the game's Information Center
+// > Harvesters tab (content.js's scrapeHarvesterRegistry()); limit: the
+// slot count from its "Galaxy Limit: N/limit" footer. The active ones
+// become the harvester slots, in the game's order, padded with idle slots
+// up to the limit - replacing whatever was set by hand, since the game is
+// the source of truth. Inactive ones collect nothing, so they're left out.
+async function handleHarvesterScrape(harvesters, limit) {
+  if (!Array.isArray(harvesters)) return;
+  const settings = await storage.loadSettings();
+  const active = harvesters.filter((h) => h && h.active && typeof h.resource === "string" && h.resource && Number(h.rate) > 0);
+  const slotCount = Math.max(1, active.length, Number.isInteger(limit) && limit > 0 ? limit : Number(settings.max_harvesters) || 4);
+  const slots = active.map((h) => ({ resource: h.resource, rate: Number(h.rate) }));
+  while (slots.length < slotCount) slots.push({ resource: null, rate: 0 });
+  const current = await storage.loadHarvesterSlots(Number(settings.max_harvesters) || 4);
+  await storage.saveHarvesterSyncStatus({ syncedAt: new Date().toISOString() });
+  if (JSON.stringify(current) === JSON.stringify(slots) && settings.max_harvesters === slotCount) return;
+  settings.max_harvesters = slotCount;
+  await storage.saveSettings(settings);
+  await storage.saveHarvesterSlots(slots);
+  await recalculateActiveBuildToMineData();
+  await recalculateManifestSelection();
+}
+
+// counts: { product: n } from the game's Information Center > Assemblers
+// tab (content.js's scrapeAssemblerRegistry()) - how many deployed
+// assemblers are making each product - the only source of the Manifest's
+// "Asm" counts. A product no assembler is making is left out, and once this
+// has been read at least once (assembler_counts_read) that means idle.
+// Display only (assemblyHoursWith()), so nothing is recalculated.
+async function handleAssemblerRegistryScrape(counts) {
+  if (!counts || typeof counts !== "object") return;
+  const next = {};
+  for (const [product, n] of Object.entries(counts)) {
+    if (typeof product === "string" && product && Number.isInteger(n) && n > 0) next[product] = n;
+  }
+  const settings = await storage.loadSettings();
+  if (settings.assembler_counts_read && JSON.stringify(settings.assembler_counts || {}) === JSON.stringify(next)) return;
+  settings.assembler_counts = next;
+  settings.assembler_counts_read = true;
+  await storage.saveSettings(settings);
+}
+
+// Every refining job not yet collected, as two screens show them: Info >
+// Refining lists all of them (every refinery), the Refining Center one
+// refinery's bays. Both are matched against the jobs already known
+// (storage refineryJobs: { refinery: [{ ore, qty, batches }] }), by ore and
+// amount within each refinery - not by slot, since the two screens number
+// theirs separately ("Row 3" / "BAY 3"):
+// - a known job still shown: already counted, left alone;
+// - a job not known yet: counted now;
+// - a known job no longer shown: collected, so it comes off.
+// The refineries are one shared bucket: pendingRefining is every known job
+// by ore, and any Blueprint/Build the Manifest or dashboard shows counts all
+// of that ore's batches toward it - so switching what you're building
+// mid-farm keeps the refining already under way. No raw-ore deduction:
+// storage already shows the ore gone (and the Refining Center's own ore list
+// updates it, see checkRefiningCenter()).
+async function handleRefiningJobs(refineries, jobs, isFullList) {
+  const ledger = await storage.loadRefineryJobs();
+  for (const key of Object.keys(ledger)) if (!Array.isArray(ledger[key])) delete ledger[key];
+
+  const seenByRefinery = {};
+  for (const name of refineries) seenByRefinery[name] = [];
+  for (const job of Array.isArray(jobs) ? jobs : []) {
+    const ore = job && catalog.findOre(job.ore);
+    if (!ore || typeof job.refinery !== "string" || !Number.isFinite(job.qty) || job.qty <= 0) continue;
+    (seenByRefinery[job.refinery] = seenByRefinery[job.refinery] || []).push({ ore: ore.name, qty: job.qty, batches: job.qty / ore.batch });
+  }
+  if (isFullList) for (const name of Object.keys(ledger)) seenByRefinery[name] = seenByRefinery[name] || [];
+
+  let changed = false;
+  for (const [refinery, seen] of Object.entries(seenByRefinery)) {
+    const unmatched = [...(ledger[refinery] || [])];
+    const kept = [];
+    const fresh = [];
+    for (const job of seen) {
+      const i = unmatched.findIndex((known) => known.ore === job.ore && known.qty === job.qty);
+      if (i >= 0) kept.push(unmatched.splice(i, 1)[0]);
+      else fresh.push(job);
+    }
+    if (unmatched.length === 0 && fresh.length === 0) continue;
+    changed = true;
+    ledger[refinery] = [...kept, ...fresh];
+    if (ledger[refinery].length === 0) delete ledger[refinery];
+  }
+
+  const pendingRefining = {};
+  for (const list of Object.values(ledger)) {
+    for (const job of list) pendingRefining[job.ore] = (pendingRefining[job.ore] || 0) + job.batches;
+  }
+  const totalChanged = JSON.stringify(pendingRefining) !== JSON.stringify(await storage.loadPendingRefining());
+  if (changed) await storage.saveRefineryJobs(ledger);
+  if (totalChanged) await storage.savePendingRefining(pendingRefining);
+  if (!totalChanged) return;
+
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
 async function handleSkillsScrape(manufacturing, engineering, captain, holds) {
   const settings = await storage.loadSettings();
   let changed = false;
@@ -552,45 +669,6 @@ async function handleLexiconPlanetsScrape(planetTypes) {
   await storage.saveScrapedPlanetTypes(scraped);
   await storage.savePlanetSyncStatus({ syncedAt: new Date().toISOString(), count: Object.keys(scraped).length });
   catalog.applyScrapedPlanetTypes(scraped);
-}
-
-// Lets the in-page Manifest overlay (js/overlay-manifest.js) set exactly
-// how many batches of an ore are currently started/pending refining,
-// without needing the full dashboard open - an absolute SET (typed
-// number), not an increment, to match the real workflow: type the count
-// when you start a run, then reset it back to 0 once you've collected the
-// output and are between runs. Same underlying pendingRefining storage key
-// and semantics as the dashboard's own Inventory/Plan a Build tab controls
-// (see tab-inventory.js's applyLocalPendingDeduction(), mirrored here since
-// the overlay has no `app` state to call that against directly).
-async function handleSetPendingBatches(oreName, newBatches) {
-  const ore = catalog.findOre(oreName);
-  if (!ore || Number.isNaN(newBatches) || newBatches < 0) return;
-  const pendingRefining = await storage.loadPendingRefining();
-  const oldBatches = pendingRefining[oreName] || 0;
-  if (newBatches === oldBatches) return;
-
-  if (newBatches > oldBatches) {
-    // Optimistic raw-ore deduction, only ever applied on an increase (ahead
-    // of the next live storage sync) - never reversed on a decrease (e.g.
-    // resetting back to 0 after collecting), which instead waits for a real
-    // sync to correct it. Matches applyLocalPendingDeduction()'s exact
-    // behavior.
-    const inventory = await storage.loadInventory(catalog);
-    const rawDelta = (newBatches - oldBatches) * ore.batch;
-    const current = inventory.rawOre.get(ore) || 0;
-    inventory.rawOre.set(ore, Math.max(0, current - rawDelta));
-    await storage.saveInventory(inventory);
-  }
-
-  if (newBatches <= 0) delete pendingRefining[oreName];
-  else pendingRefining[oreName] = newBatches;
-  await storage.savePendingRefining(pendingRefining);
-
-  await recalculateActiveBuildToMineData();
-  await recalculateActiveBuildCorpData();
-  await recalculateManifestSelection();
-  await recalculateManifestCorpSelection();
 }
 
 // Recalculates the in-page Manifest overlay's OWN plan (js/overlay-
@@ -660,18 +738,11 @@ async function recalculateManifestSelection() {
   // freshly-picked Blueprint/Build works with a sensible default before the
   // user ever touches an ore selector.
 
-  // Pending-refining batches are ALSO scoped per-selection here (see
-  // storage.js's manifestPendingBatches comment) - deliberately NOT the
-  // dashboard's global `pendingRefining` key. A batch started while working
-  // Blueprint A shouldn't silently credit Blueprint B's "how many more
-  // batches do I need" math just because they share an ore; the raw ore
-  // itself is still deducted from the one real shared inventory when the
-  // batch is entered (see handleSetManifestPendingBatches()), only the
-  // credit toward remaining need is scoped this way.
-  const manifestPendingBatches = await storage.loadManifestPendingBatches();
-  const pendingBatchesForSelection = manifestPendingBatches[selectionKey] || {};
-
-  const result = planMining(catalog, expanded, inventory, oreChoices, cargoCapacity, harvesterTotals(harvesterSlots), pendingBatchesForSelection, assemblyHours);
+  // Refining under way counts toward whatever is open - the refineries are
+  // one shared bucket (see handleRefiningJobs()), the same pendingRefining
+  // the dashboard's Plan a Build uses.
+  const pendingRefining = await storage.loadPendingRefining();
+  const result = planMining(catalog, expanded, inventory, oreChoices, cargoCapacity, harvesterTotals(harvesterSlots), pendingRefining, assemblyHours);
   const stored = toStorableToMineData(result, cargoCapacity);
   // Every entry in `stored.assembly` is, by construction, a "Farm" item -
   // expandCommodities() only cascades a commodity into assemblyHours (which
@@ -683,6 +754,9 @@ async function recalculateManifestSelection() {
   // new calculation, just surfaced into a new place.
   for (const item of stored.assembly) {
     item.breakdown = itemResourceBreakdown(catalog, item.name, item.need, assemblyPlans, settings.item_acquisition_mode);
+    // A Global Research boost cutting every recipe's materials (AssemblyPlan.
+    // materialCut) - shown on the row, since such boosts run out.
+    item.discount = assemblyPlans[item.name]?.materialCut || null;
   }
   // stored.buy mixes two different reasons an item ended up here (see
   // toStorableToMineData()'s own comment on that array): deliberately
@@ -737,20 +811,6 @@ async function handleSetItemAcquisitionMode(itemName, mode) {
   await recalculateManifestSelection();
 }
 
-// Lets the Manifest overlay's "Asm:" box record how many Assemblers are
-// making an Assembly item - display only (assemblyHoursWith()), so nothing
-// is recalculated. Through here rather than written by the overlay itself
-// for the same reason as the Farm/Buy choice above: one writer for settings.
-async function handleSetAssemblerCount(itemName, count) {
-  const n = Math.floor(Number(count));
-  if (!itemName || !Number.isFinite(n) || n < 1) return;
-  const settings = await storage.loadSettings();
-  settings.assembler_counts = { ...(settings.assembler_counts || {}) };
-  if (n === 1) delete settings.assembler_counts[itemName];
-  else settings.assembler_counts[itemName] = n;
-  await storage.saveSettings(settings);
-}
-
 // Lets the in-page Manifest overlay's selector dropdown (see js/overlay-
 // manifest.js) change which Blueprint or Build Order it's showing, without
 // opening the dashboard.
@@ -777,75 +837,19 @@ async function handleSetManifestOreChoice(materialName, oreName) {
   await recalculateManifestSelection();
 }
 
-// Lets the in-page Manifest overlay's own Batch control (js/overlay-
-// manifest.js) set exactly how many batches of an ore are currently
-// started, scoped to whichever Blueprint/Build the overlay has selected -
-// see storage.js's manifestPendingBatches comment for why this is
-// deliberately separate from handleSetPendingBatches() above (the
-// dashboard's global, shared pendingRefining). Same absolute-SET semantics
-// and the same optimistic raw-ore deduction as that function (the ore is
-// genuinely spent from the one real shared inventory regardless of which
-// selection's ledger is tracking it) - only the "credit toward remaining
-// need" ends up scoped per-selection, via recalculateManifestSelection()
-// reading manifestPendingBatches instead of pendingRefining.
-async function handleSetManifestPendingBatches(oreName, newBatches) {
-  const selection = await storage.loadManifestSelection();
-  const ore = catalog.findOre(oreName);
-  if (!selection || !ore || Number.isNaN(newBatches) || newBatches < 0) return;
-
-  const manifestPendingBatches = await storage.loadManifestPendingBatches();
-  const key = storage.manifestSelectionKey(selection);
-  const forSelection = { ...(manifestPendingBatches[key] || {}) };
-  const oldBatches = forSelection[oreName] || 0;
-  if (newBatches === oldBatches) return;
-
-  if (newBatches > oldBatches) {
-    // Same one-directional optimistic deduction as handleSetPendingBatches()
-    // - never reversed on a decrease, since a real sync is what actually
-    // confirms the ore is genuinely spent going forward.
-    const inventory = await storage.loadInventory(catalog);
-    const rawDelta = (newBatches - oldBatches) * ore.batch;
-    const current = inventory.rawOre.get(ore) || 0;
-    inventory.rawOre.set(ore, Math.max(0, current - rawDelta));
-    await storage.saveInventory(inventory);
-  }
-
-  if (newBatches <= 0) delete forSelection[oreName];
-  else forSelection[oreName] = newBatches;
-  if (Object.keys(forSelection).length > 0) manifestPendingBatches[key] = forSelection;
-  else delete manifestPendingBatches[key];
-  await storage.saveManifestPendingBatches(manifestPendingBatches);
-
-  // Inventory changed, so every pipeline that reads it needs a refresh - not
-  // just this overlay's own selection.
-  await recalculateActiveBuildToMineData();
-  await recalculateActiveBuildCorpData();
-  await recalculateManifestSelection();
-  await recalculateManifestCorpSelection();
-}
-
 // Lets the in-page Manifest overlay's "Mark Complete" button (js/overlay-
 // manifest.js) declare the currently-selected Blueprint/Build Order done:
-// clears its own per-selection batch counts and ore-source picks (see
-// storage.js's manifestPendingBatches/manifestOreChoices), then deselects so
+// clears its ore-source picks (see storage.js's manifestOreChoices), then
+// deselects so
 // the overlay falls back to its empty state instead of showing numbers for a
 // selection whose tracking data was just wiped. Deliberately never touches
 // the underlying Blueprint or Build Order itself - unlike the dashboard's
 // own "Mark Build Complete" (tab-plan.js), which deletes the build, this is
 // scoped entirely to the overlay's own tracking data, never the saved plan.
-// Never reverses any raw-ore inventory deduction already applied by past
-// batch entries, matching handleSetManifestPendingBatches()'s one-directional
-// policy above.
 async function handleMarkManifestSelectionComplete() {
   const selection = await storage.loadManifestSelection();
   if (!selection) return;
   const key = storage.manifestSelectionKey(selection);
-
-  const manifestPendingBatches = await storage.loadManifestPendingBatches();
-  if (key in manifestPendingBatches) {
-    delete manifestPendingBatches[key];
-    await storage.saveManifestPendingBatches(manifestPendingBatches);
-  }
 
   const manifestOreChoices = await storage.loadManifestOreChoices();
   if (key in manifestOreChoices) {
@@ -882,12 +886,15 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
   else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
   else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName, msg.storeCategory, msg.storeType);
+  else if (msg.type === "fsc-assembler-registry-scrape") handled = handleAssemblerRegistryScrape(msg.counts);
+  else if (msg.type === "fsc-assembler-boost") handled = handleAssemblerBoost(msg.discount);
+  else if (msg.type === "fsc-refining-scrape") handled = handleRefiningJobs([], msg.jobs, true);
+  else if (msg.type === "fsc-refinery-bays") handled = typeof msg.refinery === "string" && msg.refinery ? handleRefiningJobs([msg.refinery], msg.jobs, false) : Promise.resolve();
+  else if (msg.type === "fsc-harvesters-scrape") handled = handleHarvesterScrape(msg.harvesters, msg.limit);
   else if (msg.type === "fsc-skills-scrape") handled = handleSkillsScrape(msg.manufacturing, msg.engineering, msg.captain, msg.holds);
   else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
-  else if (msg.type === "fsc-set-pending-batches") handled = handleSetPendingBatches(msg.oreName, msg.batches);
   else if (msg.type === "fsc-switch-manifest-selection") handled = handleSwitchManifestSelection(msg.selection);
   else if (msg.type === "fsc-set-manifest-ore-choice") handled = handleSetManifestOreChoice(msg.materialName, msg.oreName);
-  else if (msg.type === "fsc-set-manifest-pending-batches") handled = handleSetManifestPendingBatches(msg.oreName, msg.batches);
   else if (msg.type === "fsc-mark-manifest-selection-complete") handled = handleMarkManifestSelectionComplete();
   else if (msg.type === "fsc-set-item-acquisition-mode") handled = handleSetItemAcquisitionMode(msg.itemName, msg.mode);
   else if (msg.type === "fsc-switch-manifest-corp-selection") handled = handleSwitchManifestCorpSelection(msg.selection);
@@ -903,7 +910,6 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   // narrow fix: a manual re-run using whatever's currently in storage, not a
   // new blanket auto-refresh listener.
   else if (msg.type === "fsc-refresh-manifest-selection") handled = recalculateManifestSelection();
-  else if (msg.type === "fsc-set-assembler-count") handled = handleSetAssemblerCount(msg.itemName, msg.count);
   else if (msg.type === "fsc-open-dashboard") handled = handleOpenDashboard(typeof msg.tab === "string" ? msg.tab : null);
   else return undefined;
   // sendResponse() itself can throw if the sender's port is already gone

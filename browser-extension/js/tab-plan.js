@@ -3,8 +3,7 @@
 // reused-gap IDs, a two-stage requirements pipeline
 // (entriesToTotals -> expandCommodities), single-build vs all-builds
 // calculation modes (the latter enabling cross-build ore consolidation
-// suggestions), a refine-batches modal with live projected-output math, and
-// the result tables. On every successful calculation the result is written
+// suggestions), and the result tables. On every successful calculation the result is written
 // to the `toMineData` storage key - this replaces both
 // app.last_plan_result (Python, in-memory only) and bridge_server.py's GET
 // handler, since the in-page Manifest overlay (js/overlay-manifest.js) now
@@ -15,21 +14,8 @@
 // headless recalculation - see recalculateActiveBuildToMineData() there.
 
 import { el, clear, selectableRow, enableInlineAutocomplete, formatHours } from "./dom-helpers.js";
-import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, markRequirements, assemblyHoursWith, BLUEPRINT_LIST_LEGEND } from "./calc-engine.js";
+import { planMining, expandCommodities, findConsolidationOpportunities, harvesterTotals, pendingRefiningOutput, entriesToTotals, toStorableToMineData, itemResourceBreakdown, blueprintShipClasses, inShipClass, shipClassLabel, groupBlueprintNames, blueprintImportHint, blueprintOptionLabel, sortBlueprintNamesBySkill, markRequirements, assemblyHoursWith, assemblersFor, BLUEPRINT_LIST_LEGEND } from "./calc-engine.js";
 import * as storage from "./storage.js";
-import { applyLocalPendingDeduction } from "./tab-inventory.js";
-
-// list of [oreName, batches] for every pending-refining ore whose outputs
-// include `materialName`. Port of gui.py's _pending_credit_contributors.
-function pendingCreditContributors(app, materialName) {
-  const out = [];
-  for (const [oreName, batches] of Object.entries(app.pendingRefining)) {
-    if (batches <= 0) continue;
-    const ore = app.catalog.findOre(oreName);
-    if (ore && ore.outputs.some((m) => m.name === materialName)) out.push([oreName, batches]);
-  }
-  return out;
-}
 
 export function initPlanTab(app, container) {
   let planEntries = []; // [[kind, name, qty], ...] - scratch list, tied to active build
@@ -137,11 +123,11 @@ export function initPlanTab(app, container) {
 
   // Same lifecycle-moment reasoning as pruneStaleItemSettings() above, but
   // for the in-page Manifest overlay's OWN per-build tracking data (see
-  // storage.js's manifestOreChoices/manifestPendingBatches/manifestSelection
-  // comments) plus this build's custom display name. Matters specifically
+  // storage.js's manifestOreChoices/manifestSelection comments) plus this
+  // build's custom display name. Matters specifically
   // because nextBuildNumber() REUSES a deleted/completed build's id for the
   // next new build - without this, a fresh Build "2" could inherit stale
-  // ore-choice/batch-count data (or even a stale name) left over from a
+  // ore-choice data (or even a stale name) left over from a
   // completely different, unrelated old Build "2". Call AFTER `name` has
   // been removed from app.builds. Only handles Build Order keys
   // (`build:${name}`) - a Blueprint's manifestOreChoices/manifestPending
@@ -158,11 +144,6 @@ export function initPlanTab(app, container) {
     if (key in manifestOreChoices) {
       delete manifestOreChoices[key];
       await storage.saveManifestOreChoices(manifestOreChoices);
-    }
-    const manifestPendingBatches = await storage.loadManifestPendingBatches();
-    if (key in manifestPendingBatches) {
-      delete manifestPendingBatches[key];
-      await storage.saveManifestPendingBatches(manifestPendingBatches);
     }
     // If the Manifest overlay (or its Corp view) still points at exactly
     // this build, clear that selection too - directly, rather than going
@@ -199,29 +180,9 @@ export function initPlanTab(app, container) {
   async function markBuildComplete() {
     if (!app.activeBuildName) return;
     const name = app.activeBuildName;
-    const result = app.lastPlanResult;
-    let involved = new Set();
-    if (result) {
-      involved = new Set([...result.oreTargetRefined.keys(), ...result.oreDirectRaw.keys()]);
-      for (const [item, need] of Object.entries(result.itemNeed)) {
-        if ((result.itemKind[item] !== "material") || need > 0) continue;
-        for (const [oreName] of pendingCreditContributors(app, item)) {
-          const ore = app.catalog.findOre(oreName);
-          if (ore) involved.add(ore);
-        }
-      }
-    }
-    const names = [...involved].map((o) => o.name);
-    const msg = names.length
-      ? `Mark build "${buildLabel(name)}" complete? This clears pending refining batches for: ${names.join(", ")}.`
-      : `Mark build "${buildLabel(name)}" complete? No recent calculation exists, so nothing will be auto-cleared from pending refining.`;
-    if (!confirm(msg)) return;
+    if (!confirm(`Mark build "${buildLabel(name)}" complete? The build is removed; refining still running keeps counting until it's collected in the game.`)) return;
 
-    for (const ore of involved) delete app.pendingRefining[ore.name];
-    await storage.savePendingRefining(app.pendingRefining);
     await cleanupBuildTrackingData(name);
-    if (app.refreshHooks.inventory) app.refreshHooks.inventory();
-
     delete app.builds[name];
     await storage.saveBuilds(app.builds);
     await pruneStaleItemSettings();
@@ -510,17 +471,20 @@ export function initPlanTab(app, container) {
             ])
           );
         } else {
-          const hours = assemblyHoursWith(assemblyHours[name], (app.settings.assembler_counts || {})[name]);
-          const hoursText = hours != null ? formatHours(hours) : "rate unknown";
+          const assemblers = assemblersFor(app.settings, name);
+          const hours = assemblyHoursWith(assemblyHours[name], assemblers);
+          const hoursText = assemblers === 0 ? "idle - no Assembler making it" : hours != null ? formatHours(hours) : "rate unknown";
           // Still planned (so players can plan ahead), but flagged - the
           // Assembler won't take this plan until it's researched.
           const locked = app.assemblyPlans[name]?.isResearchLocked();
+          const discount = app.assemblyPlans[name]?.materialCut;
+          const discountText = discount ? `, materials −${Math.round(discount * 100)}% (Global Research boost)` : "";
           sourcesContainer.appendChild(
             el("div", { class: "field-row" }, [
               el("label", {
                 for: modeSelectId,
                 class: locked ? "status-warn" : "status-ok",
-                text: `${name} (assembly, need ${need.toFixed(1)}, ${hoursText}${locked ? ", NOT RESEARCHED YET" : ""}):`,
+                text: `${name} (assembly, need ${need.toFixed(1)}, ${hoursText}${discountText}${locked ? ", NOT RESEARCHED YET" : ""}):`,
               }),
               modeSelect,
             ])
@@ -583,9 +547,6 @@ export function initPlanTab(app, container) {
 
   const missingAssemblyWarning = el("div", { class: "status-warn" });
   const summaryText = el("div", { class: "summary-text" });
-  const pendingBatchesForOreLabel = el("label", { for: "plan-pending-batches-input", text: "Batches refining:" });
-  const pendingBatchesForOreInput = el("input", { id: "plan-pending-batches-input", type: "text", value: "0", style: "width:70px" });
-  let selectedOreForPending = null;
 
   function sourceLabelFor(result, name, kind, obj) {
     if (result.materialOreChoice.has(name)) return result.materialOreChoice.get(name).name;
@@ -597,8 +558,9 @@ export function initPlanTab(app, container) {
       return `${(obj.planetTypes || []).map((p) => p.name).join(", ")} (${rate}/hr, ${hoursText})`;
     }
     if (name in result.assemblyHours) {
-      const h = assemblyHoursWith(result.assemblyHours[name], (app.settings.assembler_counts || {})[name]);
-      return `Assembly (${h !== null ? h.toFixed(1) + "h" : "rate unknown"})`;
+      const assemblers = assemblersFor(app.settings, name);
+      const h = assemblyHoursWith(result.assemblyHours[name], assemblers);
+      return `Assembly (${assemblers === 0 ? "idle" : h !== null ? h.toFixed(1) + "h" : "rate unknown"})`;
     }
     if (name in result.unresolved) {
       return (app.settings.item_acquisition_mode || {})[name] === "buy" ? "(buy)" : "(no known source)";
@@ -674,10 +636,7 @@ export function initPlanTab(app, container) {
           el("td", { text: String(trips) }),
           el("td", { text: value.toFixed(0) }),
         ],
-        () => {
-          selectedOreForPending = ore.name;
-          pendingBatchesForOreInput.value = String(app.pendingRefining[ore.name] || 0);
-        }
+        () => {}
       );
       resultOreTbody.appendChild(row);
     }
@@ -803,96 +762,6 @@ export function initPlanTab(app, container) {
     document.body.appendChild(overlay);
   }
 
-  async function updatePendingForSelectedOre() {
-    if (!selectedOreForPending) return;
-    const ore = app.catalog.findOre(selectedOreForPending);
-    const batches = parseInt(pendingBatchesForOreInput.value, 10);
-    if (!ore || Number.isNaN(batches) || batches < 0) {
-      alert("Select an ore row and enter a whole number of batches (0 or more).");
-      return;
-    }
-    const oldBatches = app.pendingRefining[ore.name] || 0;
-    await applyLocalPendingDeduction(app, ore, oldBatches, batches);
-    if (batches <= 0) delete app.pendingRefining[ore.name];
-    else app.pendingRefining[ore.name] = batches;
-    await storage.savePendingRefining(app.pendingRefining);
-    if (app.refreshHooks.inventory) app.refreshHooks.inventory();
-    await calculatePlan();
-  }
-
-  // ============================ Refine dialog ============================
-  function openRefineDialog() {
-    const row = resultMatTbody.querySelector("tr.selected");
-    if (!row) {
-      alert("Select an item in the Items Needed table first.");
-      return;
-    }
-    const itemName = row.dataset.item;
-    const [kind, material] = app.catalog.classify(itemName);
-    if (kind !== "material" || material.sources.length === 0) {
-      alert("Refining only applies to refined materials with a known source ore.");
-      return;
-    }
-    const stillNeed = (app.lastPlanResult && app.lastPlanResult.itemNeed[itemName]) || 0;
-
-    const oreSelect = el("select", { id: "refine-ore-select" }, material.sources.map((o) => el("option", { value: o.name, text: o.name })));
-    const batchesInput = el("input", { id: "refine-batches-input", type: "text", value: "1", style: "width:70px" });
-    const infoText = el("div", { class: "status-text" });
-
-    function updateInfo() {
-      const ore = app.catalog.findOre(oreSelect.value);
-      const batches = parseInt(batchesInput.value, 10) || 0;
-      const rawNeeded = batches * ore.batch;
-      const stored = app.inventory.rawQty(ore);
-      const shortfall = Math.max(0, rawNeeded - stored);
-      const refinedOut = batches * ore.refinedQ;
-      infoText.textContent = `${batches} batch(es) of ${ore.name}: needs ${rawNeeded} raw (have ${stored}, short ${shortfall}) -> yields ${refinedOut} of each output.`;
-    }
-
-    function suggestBatches() {
-      const ore = app.catalog.findOre(oreSelect.value);
-      batchesInput.value = String(Math.max(1, Math.ceil(stillNeed / ore.refinedQ)));
-      updateInfo();
-    }
-
-    oreSelect.addEventListener("change", suggestBatches);
-    batchesInput.addEventListener("input", updateInfo);
-
-    const confirmBtn = el("button", {
-      text: "Confirm",
-      onclick: async () => {
-        const ore = app.catalog.findOre(oreSelect.value);
-        const batches = parseInt(batchesInput.value, 10);
-        if (Number.isNaN(batches) || batches <= 0) {
-          alert("Enter a positive whole number of batches.");
-          return;
-        }
-        const oldBatches = app.pendingRefining[ore.name] || 0;
-        const newBatches = oldBatches + batches; // additive, not a replace
-        await applyLocalPendingDeduction(app, ore, oldBatches, newBatches);
-        app.pendingRefining[ore.name] = newBatches;
-        await storage.savePendingRefining(app.pendingRefining);
-        if (app.refreshHooks.inventory) app.refreshHooks.inventory();
-        overlay.remove();
-        await calculatePlan();
-      },
-    });
-    const cancelBtn = el("button", { text: "Cancel", onclick: () => overlay.remove() });
-
-    const overlay = el("div", { class: "modal-overlay" }, [
-      el("div", { class: "modal-box" }, [
-        el("h3", { text: `Refine ${itemName}` }),
-        el("div", { class: "status-text", text: `Still need: ${stillNeed.toFixed(1)}` }),
-        el("div", { class: "field-row" }, [el("label", { for: "refine-ore-select", text: "Ore:" }), oreSelect]),
-        el("div", { class: "field-row" }, [el("label", { for: "refine-batches-input", text: "Batches:" }), batchesInput]),
-        infoText,
-        el("div", { class: "toolbar" }, [confirmBtn, cancelBtn]),
-      ]),
-    ]);
-    document.body.appendChild(overlay);
-    suggestBatches();
-  }
-
   // ============================ Layout ============================
   container.appendChild(
     el("div", {}, [
@@ -929,14 +798,8 @@ export function initPlanTab(app, container) {
       ]),
       el("h3", { class: "section-title", text: "Items Needed" }),
       el("div", { class: "scroll-table" }, [resultMatTable]),
-      el("div", { class: "toolbar" }, [el("button", { text: "Refine Selected...", onclick: openRefineDialog })]),
       el("h3", { class: "section-title", text: "Ore to Mine" }),
       el("div", { class: "scroll-table" }, [resultOreTable]),
-      el("div", { class: "toolbar" }, [
-        pendingBatchesForOreLabel,
-        pendingBatchesForOreInput,
-        el("button", { text: "Set for Selected Ore", onclick: updatePendingForSelectedOre }),
-      ]),
       missingAssemblyWarning,
       summaryText,
     ])

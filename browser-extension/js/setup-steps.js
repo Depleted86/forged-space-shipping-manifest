@@ -87,7 +87,7 @@ export function buildSetupSteps(s) {
       },
       {
         title: "Set up your harvesters",
-        where: "On the Planets tab: set Harvester slots owned, then each harvester's resource and rate.",
+        where: "In the game: Info → Harvesters tab, and they fill in by themselves. Or set them by hand on the Planets tab.",
         tab: "planets",
         tabLabel: "Planets",
         done: assigned > 0,

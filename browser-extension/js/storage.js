@@ -54,9 +54,16 @@ export const DEFAULT_SETTINGS = {
   // Skills so they're current (js/overlay-setup.js). Turned off in Settings.
   session_reminder: true,
   // { commodityName: n } - how many Assemblers the player has making each
-  // Assembly item, set in the Manifest overlay. Shares the item's one-hour
-  // runs between them for its time estimate (assemblyHoursWith()).
+  // Assembly item, read from the game's Info > Assemblers tab. Shares the
+  // item's one-hour runs between them for its time estimate
+  // (assemblyHoursWith()); an item missing once it's been read
+  // (assembler_counts_read) has none, and shows as idle.
   assembler_counts: {},
+  assembler_counts_read: false,
+  // Share of every Assembly recipe's materials a Global Research boost is
+  // cutting (0.3), from the Assembly Facility's "Assembler Efficiency" badge;
+  // 0 when none is on. See AssemblyPlan.materialCut.
+  assembler_boost: 0,
 };
 
 const KEYS = {
@@ -81,9 +88,10 @@ const KEYS = {
   manifestOreChoices: "manifestOreChoices",
   manifestCorpSelection: "manifestCorpSelection",
   manifestCorpToMineData: "manifestCorpToMineData",
-  manifestPendingBatches: "manifestPendingBatches",
+  refineryJobs: "refineryJobs",
   buildLabels: "buildLabels",
   gettingStarted: "gettingStarted",
+  harvesterSyncMeta: "harvesterSyncMeta",
 };
 
 // Pre-2026-08-15 key names, from before Recipe/AssemblyRecipe were renamed
@@ -196,14 +204,46 @@ export async function loadAssemblyPlans() {
     raw = await getKey(LEGACY_KEYS.assemblyPlans, {});
     if (Object.keys(raw).length > 0) await setKey(KEYS.assemblyPlans, raw);
   }
+  // Two 4.3 test builds saved boost-cut amounts instead of full ones: one
+  // with the full amounts beside them (base_requirements), one with only the
+  // cut share it saw (discount). Both are turned back into full amounts here
+  // and saved once that way. From a discount it's worked back (23 / 0.7 =
+  // 33), which can be one off the card (15 / 0.7 rounds to 21, the card says
+  // 22) - cutting it again still gives the card's amount exactly, and the
+  // next Configure Production visit reads the true full amount.
+  const settings = await loadSettings();
+  const legacyCuts = Object.values(raw).map((entry) => entry && !entry.base_requirements && entry.discount).filter((d) => d > 0 && d < 1);
+  // The boost is one cut for every recipe; each plan's own saved discount
+  // was only that build's guess from its rounded amounts (small ones read as
+  // 25-50%), so the cut most plans showed is the one undone on all of them -
+  // and it's the boost itself, if that hasn't been read yet (checked on the
+  // saved settings, since loadSettings() fills in the default 0).
+  let legacyBoost = 0;
+  if (legacyCuts.length > 0) {
+    const tally = {};
+    for (const d of legacyCuts) tally[d] = (tally[d] || 0) + 1;
+    legacyBoost = Number(Object.entries(tally).sort((a, b) => b[1] - a[1])[0][0]);
+    if ((await getKey(KEYS.settings, {})).assembler_boost == null) {
+      settings.assembler_boost = legacyBoost;
+      await saveSettings(settings);
+    }
+  }
+  // A Global Research boost's cut (see AssemblyPlan.materialCut) - applied
+  // to every plan, worked out from their full amounts.
+  const cut = Number(settings.assembler_boost) || 0;
   const assemblyPlans = {};
   for (const [outputItem, entry] of Object.entries(raw)) {
     const plan = new AssemblyPlan(outputItem, entry.rate_per_hour ?? 1);
-    for (const [itemName, qty] of Object.entries(entry.requirements || {})) plan.setRequirement(itemName, qty);
+    const legacyCut = !entry.base_requirements && entry.discount > 0 && entry.discount < 1 ? legacyBoost : 0;
+    for (const [itemName, qty] of Object.entries(entry.base_requirements || entry.requirements || {})) {
+      plan.setRequirement(itemName, legacyCut ? Math.round(qty / (1 - legacyCut)) : qty);
+    }
+    plan.materialCut = cut;
     plan.captainLevel = entry.captain_level != null ? entry.captain_level : null;
     plan.research = entry.research ?? null;
     assemblyPlans[outputItem] = plan;
   }
+  if (Object.values(raw).some((entry) => entry && (entry.base_requirements || entry.discount != null))) await saveAssemblyPlans(assemblyPlans);
   return assemblyPlans;
 }
 
@@ -438,25 +478,15 @@ export async function saveManifestCorpToMineData(data) {
   await setKey(KEYS.manifestCorpToMineData, data);
 }
 
-// { "<type>:<name>": { oreName: batchCount } } - per-selection pending-
-// refining batch counts for the Manifest overlay's Batch controls, keyed by
-// manifestSelectionKey() exactly like manifestOreChoices above. Deliberately
-// separate from the global `pendingRefining` key the dashboard's Inventory/
-// Plan a Build tabs use - a real batch already started for Blueprint A
-// shouldn't silently credit Blueprint B's own "how many more batches do I
-// need" math just because they happen to share an ore, which is what a
-// single global counter caused (2026-08-29 - user confirmed this was
-// actively misleading them). The raw-ore quantity ITSELF is still deducted
-// from the one real shared inventory when a batch count is entered here
-// (see background.js's handleSetManifestPendingBatches()) - only the
-// "credit toward remaining need" is scoped per-selection, since the ore is
-// genuinely spent regardless of which selection's ledger is tracking it.
-export async function loadManifestPendingBatches() {
-  return getKey(KEYS.manifestPendingBatches, {});
+// { refinery: [{ ore, qty, batches }] } - every refining job the extension
+// has seen and not yet seen collected, one shared bucket - see
+// background.js's handleRefiningJobs().
+export async function loadRefineryJobs() {
+  return getKey(KEYS.refineryJobs, {});
 }
 
-export async function saveManifestPendingBatches(batches) {
-  await setKey(KEYS.manifestPendingBatches, batches);
+export async function saveRefineryJobs(jobs) {
+  await setKey(KEYS.refineryJobs, jobs);
 }
 
 // { buildId: customLabel } - an optional player-chosen display name for a
@@ -488,4 +518,15 @@ export async function loadGettingStarted() {
 
 export async function saveGettingStarted(state) {
   await setKey(KEYS.gettingStarted, state);
+}
+
+// { syncedAt: ISOString } - when the harvester slots were last filled from
+// the game's Information Center > Harvesters tab, for the Planets tab's
+// status line.
+export async function loadHarvesterSyncStatus() {
+  return getKey(KEYS.harvesterSyncMeta, null);
+}
+
+export async function saveHarvesterSyncStatus(meta) {
+  await setKey(KEYS.harvesterSyncMeta, meta);
 }

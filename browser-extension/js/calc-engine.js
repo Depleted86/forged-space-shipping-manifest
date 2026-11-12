@@ -149,10 +149,18 @@ export function blueprintOptionLabel(name, blueprint) {
   return blueprint && !blueprint.hasRecipe() ? `${name} ${UNVIEWED_MARK}` : name;
 }
 
+// How many Assemblers are making an Assembly item, from the game's Info >
+// Assemblers tab (settings.assembler_counts): 0 when that's been read and
+// none are, null when it's never been read (so it isn't known).
+export function assemblersFor(settings, itemName) {
+  if (!settings || !settings.assembler_counts_read) return null;
+  return (settings.assembler_counts || {})[itemName] || 0;
+}
+
 // Hours an Assembly item takes with `assemblers` Assemblers all making it:
 // `hours` is its one-hour runs, shared out between them and rounded up to
-// whole runs, since a run can't be split. Set per item in the Manifest
-// overlay (settings.assembler_counts); 1 when unset. null stays null.
+// whole runs, since a run can't be split. 1 when unknown (see
+// assemblersFor() - callers show 0 as idle). null stays null.
 export function assemblyHoursWith(hours, assemblers) {
   if (hours == null) return null;
   const count = Math.max(1, Math.floor(assemblers || 1));
@@ -237,6 +245,14 @@ export class AssemblyPlan {
     // researched, so the plan can't be queued at an Assembler. Display-only;
     // a locked plan still counts in planning so players can plan ahead.
     this.research = null;
+    // Share of every recipe's materials a Global Research boost is cutting
+    // right now (0.3 = "Assembler Efficiency -30% materials"), or 0. The same
+    // for every plan - storage.js's loadAssemblyPlans() sets it from
+    // settings.assembler_boost, which the Assembly Facility's header badge
+    // keeps current - so `requirements` always hold the full, uncut amounts
+    // and the cut is worked out here, rounded the way the game rounds them
+    // (22 -> 15, 153 -> 107).
+    this.materialCut = 0;
   }
 
   isResearchLocked() {
@@ -247,6 +263,14 @@ export class AssemblyPlan {
   // Assembly Facility (or the player) supplies one - it can't be expanded.
   hasRecipe() {
     return Object.keys(this.requirements).length > 0;
+  }
+
+  // { itemName: qtyPerRun } with any boost's cut applied.
+  effectiveRequirements() {
+    if (!(this.materialCut > 0)) return this.requirements;
+    const out = {};
+    for (const [name, qty] of Object.entries(this.requirements)) out[name] = Math.round(qty * (1 - this.materialCut));
+    return out;
   }
 
   setRequirement(itemName, qty) {
@@ -379,7 +403,7 @@ export function expandCommodities(catalog, requirements, assemblyPlans, inventor
       alreadyExpandedRuns[name] = runs;
       // Each run takes one hour (see AssemblyPlan).
       assemblyHours[name] = plan.ratePerHour > 0 ? runs : null;
-      for (const [inputName, qtyPerRun] of Object.entries(plan.requirements)) {
+      for (const [inputName, qtyPerRun] of Object.entries(plan.effectiveRequirements())) {
         expanded[inputName] = (expanded[inputName] || 0.0) + qtyPerRun * deltaRuns;
       }
       expandedAny = true;

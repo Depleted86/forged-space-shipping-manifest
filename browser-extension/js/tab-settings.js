@@ -230,7 +230,7 @@ export function initSettingsTab(app, container) {
       shipInfo,
       el("div", { class: "hint", text: "Read from the game's top bar while it's open - switching ships updates these. Mining trips use the Ore Hold when your ship has one, otherwise cargo." }),
       el("h3", { class: "section-title", text: "Reminders" }),
-      el("div", { class: "field-row" }, [reminderCheckbox, el("label", { for: "session-reminder", text: "Remind me to refresh storage and skills each session" })]),
+      el("div", { class: "field-row" }, [reminderCheckbox, el("label", { for: "session-reminder", text: "Remind me to refresh my game data (storage, skills, harvesters, assemblers, refining) each session" })]),
       el("div", { class: "hint", text: "When you start playing, a small window on the game page lists Commercial Storage and Skills, and ticks each off once it's been opened." }),
       el("h3", { class: "section-title", text: "Move to another browser or PC" }),
       el("div", { class: "hint", text: "Save your blueprints, assembly plans, builds (including corp builds), harvester slots and planet types to a file, then import it in the extension on the other browser or PC. Importing adds to what's already there, and blueprints already read from the game there are kept. If the file would change your harvester settings or ore/buy choices, you're asked first." }),

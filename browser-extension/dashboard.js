@@ -110,6 +110,14 @@ async function bootstrap() {
     if (changes.inventorySyncMeta && app.refreshHooks.inventory) {
       app.refreshHooks.inventory();
     }
+    // Harvester slots filled from the game's Harvesters tab (background.js's
+    // handleHarvesterScrape()) - the slot count arrives via settings below.
+    if (changes.harvesters || changes.harvesterSyncMeta) {
+      storage.loadHarvesterSlots(app.maxHarvesters).then((slots) => {
+        app.harvesterSlots = slots;
+        if (app.refreshHooks.planets) app.refreshHooks.planets();
+      });
+    }
     if (changes.corpInventory) {
       storage.loadCorpInventory().then((inv) => {
         app.corpInventory = inv;
@@ -157,11 +165,20 @@ async function bootstrap() {
     // read-time rather than caching a reference, so this is safe.
     if (changes.settings) {
       storage.loadSettings().then((settings) => {
-        // Assembler counts set in the Manifest overlay change Plan a Build's
+        // Assembler counts read from Info > Assemblers change Plan a Build's
         // Assembly times, so it redraws with them.
-        const countsChanged = JSON.stringify(settings.assembler_counts || {}) !== JSON.stringify(app.settings.assembler_counts || {});
+        const counts = (st) => JSON.stringify([st.assembler_counts || {}, !!st.assembler_counts_read]);
+        const countsChanged = counts(settings) !== counts(app.settings);
+        // A Global Research boost starting or ending changes every recipe's
+        // cut (AssemblyPlan.materialCut), which is set as recipes load.
+        const boostChanged = (Number(settings.assembler_boost) || 0) !== (Number(app.settings.assembler_boost) || 0);
         app.settings = settings;
-        if (countsChanged && app.refreshHooks.plan) app.refreshHooks.plan();
+        if (boostChanged) {
+          storage.loadAssemblyPlans().then((assemblyPlans) => {
+            app.assemblyPlans = assemblyPlans;
+            if (app.refreshHooks.plan) app.refreshHooks.plan();
+          });
+        } else if (countsChanged && app.refreshHooks.plan) app.refreshHooks.plan();
         app.maxHarvesters = Number(settings.max_harvesters || app.maxHarvesters);
         // A different slot count also needs the roster resized, or the
         // Planets tab keeps showing the old number of rows.

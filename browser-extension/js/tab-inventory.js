@@ -1,23 +1,11 @@
 // Inventory tab - live item table (fed by background.js's storage scrape,
-// not a manual refresh - there's no CSV fallback here) + pending-refining
-// tracker. Port of gui.py's _build_inventory_tab and its handlers.
+// not a manual refresh - there's no CSV fallback here) + the refining jobs
+// counted from the game (background.js's handleRefiningJobs()). Port of
+// gui.py's _build_inventory_tab and its handlers.
 
-import { el, clear, selectableRow } from "./dom-helpers.js";
+import { el, clear } from "./dom-helpers.js";
 import * as storage from "./storage.js";
 import { Inventory } from "./calc-engine.js";
-
-// Deducts (newBatches - oldBatches) * ore.batch raw ore from inventory
-// immediately (optimistic local update, ahead of the next live scrape sync)
-// - but ONLY on an increase. Deliberately never reversed on decrease/clear:
-// a real sync will correct that instead, to avoid double-crediting ore that
-// was already spent. Port of gui.py's _apply_local_pending_deduction.
-export async function applyLocalPendingDeduction(app, ore, oldBatches, newBatches) {
-  if (newBatches <= oldBatches) return;
-  const delta = (newBatches - oldBatches) * ore.batch;
-  const current = app.inventory.rawOre.get(ore) || 0;
-  app.inventory.rawOre.set(ore, Math.max(0, current - delta));
-  await storage.saveInventory(app.inventory);
-}
 
 export function initInventoryTab(app, container) {
   let search = "";
@@ -70,13 +58,7 @@ export function initInventoryTab(app, container) {
     }
   }
 
-  // --- Pending refining ---
-  const pendingOreSelect = el(
-    "select",
-    {},
-    app.catalog.oreNames().map((n) => el("option", { value: n, text: n }))
-  );
-  const pendingBatchesInput = el("input", { type: "text", value: "0", style: "width:70px" });
+  // --- Refining in progress (read-only, from the game) ---
   const pendingTbody = el("tbody");
   const pendingTable = el("table", { class: "data-table" }, [
     el("thead", {}, [el("tr", {}, ["Ore", "Batches", "Raw Committed", "Pending Output"].map((h) => el("th", { text: h })))]),
@@ -90,41 +72,11 @@ export function initInventoryTab(app, container) {
       const ore = app.catalog.findOre(oreName);
       if (!ore) continue;
       const rawCommitted = batches * ore.batch;
-      const outputAmount = batches * ore.refinedQ;
+      const outputAmount = Math.round(batches * ore.refinedQ);
       const outputsStr = ore.outputs.map((m) => `${m.name} +${outputAmount}`).join(", ");
-      const row = selectableRow(
-        { "data-ore": oreName },
-        `Select ${oreName}, ${batches} batches pending`,
-        [el("td", { text: oreName }), el("td", { text: String(batches) }), el("td", { text: String(rawCommitted) }), el("td", { text: outputsStr })],
-        () => {}
-      );
-      pendingTbody.appendChild(row);
+      const shown = Math.round(batches * 10) / 10;
+      pendingTbody.appendChild(el("tr", {}, [el("td", { text: oreName }), el("td", { text: String(shown) }), el("td", { text: String(Math.round(rawCommitted)) }), el("td", { text: outputsStr })]));
     }
-  }
-
-  async function setPendingRefining() {
-    const oreName = pendingOreSelect.value;
-    const batches = parseInt(pendingBatchesInput.value, 10);
-    if (!oreName || Number.isNaN(batches) || batches < 0) {
-      alert("Choose an ore and enter a whole number of batches (0 or more).");
-      return;
-    }
-    const ore = app.catalog.findOre(oreName);
-    const oldBatches = app.pendingRefining[oreName] || 0;
-    await applyLocalPendingDeduction(app, ore, oldBatches, batches);
-    if (batches <= 0) delete app.pendingRefining[oreName];
-    else app.pendingRefining[oreName] = batches;
-    await storage.savePendingRefining(app.pendingRefining);
-    renderInventoryTable();
-    renderPendingTable();
-  }
-
-  async function clearSelectedPending() {
-    const row = pendingTbody.querySelector("tr.selected");
-    if (!row) return;
-    delete app.pendingRefining[row.dataset.ore];
-    await storage.savePendingRefining(app.pendingRefining);
-    renderPendingTable();
   }
 
   // Storage scrapes merge into this list (see background.js's
@@ -147,14 +99,8 @@ export function initInventoryTab(app, container) {
       el("div", { class: "toolbar" }, [el("label", { text: "Search:" }), searchInput, el("button", { text: "Clear stored inventory", onclick: clearStoredInventory })]),
       el("div", { class: "scroll-table" }, [invTable]),
       el("h3", { class: "section-title", text: "Refining In Progress" }),
-      el("div", { class: "toolbar" }, [
-        pendingOreSelect,
-        el("label", { text: "Batches:" }),
-        pendingBatchesInput,
-        el("button", { text: "Set", onclick: setPendingRefining }),
-      ]),
+      el("div", { class: "hint", text: "Filled in from the game: open the Refining Center at a refinery, or Info → Refining for all of them, and every job not yet collected is counted once. Collected jobs come off by themselves." }),
       el("div", { class: "scroll-table" }, [pendingTable]),
-      el("div", { class: "toolbar" }, [el("button", { text: "Clear Selected", onclick: clearSelectedPending })]),
     ])
   );
 

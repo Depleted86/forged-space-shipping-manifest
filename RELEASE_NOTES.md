@@ -2,6 +2,35 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 4.3 (prepared 2026-11-08)
+
+### Release notes (public)
+
+- **Harvesters fill in by themselves.** Open Info → Harvesters in the game and the Planets tab's harvester slots are set from it: each active harvester's resource and rate, and the slot count from your Galaxy Limit. Harvester times in the Manifest update straight away. You can still set them by hand; the next time you open the Harvesters tab, the game's list takes over again.
+- **Assembler counts fill in by themselves.** Open Info → Assemblers in the game and each Assembly item in the Manifest shows **Asm N** - how many of your deployed assemblers are making it - with its time shared between them. An item no assembler is making shows **idle** and **Asm 0**. The count is no longer typed in; until you first open the Assemblers tab it shows **Asm ?** and is timed as one assembler.
+- **The "Refresh your data" reminder now lists Info → Harvesters, Info → Assemblers and Info → Refining** alongside Commercial Storage and Skills, ticking each off as you open it. Info → Refining counts the jobs at every refinery, so after that the Refining Center only needs to keep its own refinery up to date.
+- **Refining in progress fills in by itself.** Open the Refining Center at any refinery, or Info → Refining for all of them, and every job you haven't collected yet is counted. Each job is counted once: jobs the extension already knows are left alone, new ones are added, and ones that have gone are taken off as collected. Inventory → "Refining In Progress" shows the total.
+- **Refining counts toward whatever you're building.** Your refineries are one shared pool: open any Blueprint or Build in the Manifest and each Refined row shows **Active batches: refining / still needed** for that ore, counting every running batch at every refinery - so switching to another build mid-farm keeps the refining already under way. The Refining Center's ore list also updates your ore stock straight away.
+- **No more typing refining batches.** The Manifest's Batch box, the Inventory tab's Set/Clear refining controls, Plan a Build's "Batches refining" box and its "Refine Selected…" dialog are gone - the game's own screens fill all of it in.
+- Fixed: "Shipping Manifest can't read Commercial Storage" no longer pops up on a station's Promenade when deliveries or passengers are turned in automatically.
+- **Global Research boosts on Assembly recipes.** Recipes are saved at their full amounts, and while a boost such as "Assembler Efficiency -30% materials" is on, the cut is applied to every recipe when planning - rounded as the game rounds it - with the Manifest marking assembly items **−30%**. The extension notices the boost start and end from the badge in the Assembly Facility's header, on any of its tabs (including the slots screen you open to collect output), so there's no need to reopen Configure Production.
+- Fixed: Assembly recipes with a research-cut cost were saved far too big - the struck-through old amount and the new one were read as one number ("22" and "15" White Iron became 2,215). Open the Assembly Facility once to refresh your saved recipes.
+
+### Notes for reviewers (private)
+
+Update to 4.2 (live). No permission changes: still just `storage` and the single host permission for `https://forgedspace.com/*`. Still no network requests of any kind; all data stays in `browser.storage.local`.
+
+**New page-read surfaces, each read only while that screen is open:**
+
+- **Information Center › Harvesters** (`content.js`, `scrapeHarvesterRegistry()`): found by its table's column headings ("Type", "Resource", "Status") inside the panel whose footer reads "Harvester Registry ... Galaxy Limit". Reads each row's resource name, "N units/hr" rate and status, and the footer's limit. Saved through a new `fsc-harvesters-scrape` message to `background.js`.
+- **Information Center › Assemblers** (`content.js`, `scrapeAssemblerRegistry()`): found by its table's "Assembler" and "Product" headings inside the panel whose footer reads "Assembler Registry". Reads each row's product name only, to count assemblers per product. Saved through a new `fsc-assembler-registry-scrape` message.
+- **Information Center › Refining** (`content.js`, `scrapeRefining()`): found by its footer text "Material Processing Monitor - N Active Operations", then the table with "Location", "Resource" and "Input Qty" headings in that panel. Reads each row's location, resource name and input amount, and saves only when the row count matches the footer's N. Saved through a new `fsc-refining-scrape` message.
+- **Refining Center** (`content.js`, `checkRefiningCenter()`), the station service: found by its "Refining Center" title. Reads the refinery name ("Bays at ..."), each bay's ore name and "N ore" (and whether it's free), and the left-hand ore list (name and storage amount). The bays are sent as a new `fsc-refinery-bays` message whenever they change; the ore list goes through the existing `fsc-storage-scrape` message as a partial update, like a filtered Commercial Storage read. `background.js` (`handleRefiningJobs()`) matches both job lists against the jobs it already has in `browser.storage.local`.
+
+- **Assembly Facility header badge** (`content.js`, `assemblerBoost()`): reads the "Assembler Efficiency" / "-N% materials" badge while the Facility is open, sent as a new `fsc-assembler-boost` message. Configure Production cards are read for their full (struck-through) amounts during a boost.
+
+All of these use `querySelectorAll`, `textContent` and `classList.contains` only (the struck-through amounts are removed from a detached `cloneNode` copy, never the page) - the same read-only pattern as the existing scrapers: no `.click()`, `.dispatchEvent()`, value assignment or other page mutation.
+
 ## 4.2 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-07; live on Firefox, Chrome and Edge 2026-11-07)
 
 ### Release notes (public)
