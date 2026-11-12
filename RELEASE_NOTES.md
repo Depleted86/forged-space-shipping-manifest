@@ -2,7 +2,7 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
-## 4.3 (prepared 2026-11-08)
+## 4.3 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-11)
 
 ### Release notes (public)
 
@@ -12,8 +12,8 @@ Copy/paste source for each version's AMO submission fields - "Release Notes" (pu
 - **Refining in progress fills in by itself.** Open the Refining Center at any refinery, or Info → Refining for all of them, and every job you haven't collected yet is counted. Each job is counted once: jobs the extension already knows are left alone, new ones are added, and ones that have gone are taken off as collected. Inventory → "Refining In Progress" shows the total.
 - **Refining counts toward whatever you're building.** Your refineries are one shared pool: open any Blueprint or Build in the Manifest and each Refined row shows **Active batches: refining / still needed** for that ore, counting every running batch at every refinery - so switching to another build mid-farm keeps the refining already under way. The Refining Center's ore list also updates your ore stock straight away.
 - **No more typing refining batches.** The Manifest's Batch box, the Inventory tab's Set/Clear refining controls, Plan a Build's "Batches refining" box and its "Refine Selected…" dialog are gone - the game's own screens fill all of it in.
-- Fixed: "Shipping Manifest can't read Commercial Storage" no longer pops up on a station's Promenade when deliveries or passengers are turned in automatically.
 - **Global Research boosts on Assembly recipes.** Recipes are saved at their full amounts, and while a boost such as "Assembler Efficiency -30% materials" is on, the cut is applied to every recipe when planning - rounded as the game rounds it - with the Manifest marking assembly items **−30%**. The extension notices the boost start and end from the badge in the Assembly Facility's header, on any of its tabs (including the slots screen you open to collect output), so there's no need to reopen Configure Production.
+- Fixed: "Shipping Manifest can't read Commercial Storage" no longer pops up on a station's Promenade when deliveries or passengers are turned in automatically.
 - Fixed: Assembly recipes with a research-cut cost were saved far too big - the struck-through old amount and the new one were read as one number ("22" and "15" White Iron became 2,215). Open the Assembly Facility once to refresh your saved recipes.
 
 ### Notes for reviewers (private)
