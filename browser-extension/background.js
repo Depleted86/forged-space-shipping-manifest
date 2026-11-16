@@ -372,6 +372,7 @@ async function handleAssemblerScrape(items) {
     if (!item || !item.name) continue;
     const plan = assemblyPlans[item.name] || new AssemblyPlan(item.name, item.ratePerHour || 1);
     plan.ratePerHour = item.ratePerHour || plan.ratePerHour || 1;
+    plan.rateIsBase = false;
     const scrapedReqs = item.requirements || {};
     for (const [reqName, qty] of Object.entries(scrapedReqs)) plan.setRequirement(reqName, qty);
     for (const existingName of Object.keys(plan.requirements)) {
@@ -390,8 +391,52 @@ async function handleAssemblerScrape(items) {
   await recalculateManifestCorpSelection();
 }
 
+// items: [{name, requirements, ratePerHour, captainLevel, rdLevel}] scraped
+// from the Galactic Exchange's Assembler Plans list by content.js - every
+// plan in the game, with its full recipe. The recipe and Captain level
+// replace what's saved (same pruning as handleAssemblerScrape()), so plans
+// not unlocked yet get one too. Its rate is the base rate, before this
+// player's R&D boosts, so it's only used for a plan with no recipe saved yet
+// (or one whose rate came from here before) - one with a recipe was read
+// from the Assembly Facility (or typed in), whose rate is the one this
+// player actually gets. Marked rateIsBase until the Facility shows it. The R&D level shown is
+// the Research Skill a plan needs, kept for plans the R&D list didn't give
+// one for; whether it's researched is only ever taken from the R&D Office.
+async function handleExchangePlansScrape(items) {
+  const assemblyPlans = await storage.loadAssemblyPlans();
+  for (const item of items || []) {
+    if (!item || !item.name) continue;
+    const scrapedReqs = item.requirements || {};
+    if (Object.keys(scrapedReqs).length === 0) continue;
+    const plan = assemblyPlans[item.name] || new AssemblyPlan(item.name, item.ratePerHour || 1);
+    if ((Object.keys(plan.requirements).length === 0 || plan.rateIsBase) && item.ratePerHour) {
+      plan.ratePerHour = item.ratePerHour;
+      plan.rateIsBase = true;
+    }
+    for (const [reqName, qty] of Object.entries(scrapedReqs)) plan.setRequirement(reqName, qty);
+    for (const existingName of Object.keys(plan.requirements)) {
+      if (!(existingName in scrapedReqs)) plan.setRequirement(existingName, 0);
+    }
+    plan.captainLevel = item.captainLevel ?? null;
+    if (plan.research && plan.research.skillRequired == null && item.rdLevel != null) {
+      plan.research = { ...plan.research, skillRequired: item.rdLevel };
+    }
+    assemblyPlans[item.name] = plan;
+  }
+  await storage.saveAssemblyPlans(assemblyPlans);
+  const settings = await storage.loadSettings();
+  if (!settings.exchange_plans_read) {
+    settings.exchange_plans_read = true;
+    await storage.saveSettings(settings);
+  }
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
 // plans: [{name, level, skillRequired, progress, active}] scraped from the
-// R&D Office's "Select Research Plan" list by content.js - every research
+// R&D Office's Research plans tab by content.js - every research
 // plan in the game, level 0 meaning not researched yet. Plans not already
 // known are added with no recipe (the R&D list doesn't show one); the
 // Assembly Facility scrape fills it in once the plan unlocks. Each scrape
@@ -503,7 +548,7 @@ function recipeSignature(requirements) {
 }
 
 // manufacturing: the player's Manufacturing skill level, scraped from the
-// Character Skills window by content.js; captain: their Captain level, from
+// Skills window by content.js; captain: their Captain level, from
 // the HUD. Either may be null (Skills window closed). Only written when one
 // changed, so the dashboard isn't told settings changed on every poll.
 // holds: {cargo, oreHold} capacities from the HUD (oreHold null = this ship
@@ -602,6 +647,13 @@ async function handleRefiningJobs(refineries, jobs, isFullList) {
   }
   const totalChanged = JSON.stringify(pendingRefining) !== JSON.stringify(await storage.loadPendingRefining());
   if (changed) await storage.saveRefineryJobs(ledger);
+  if (isFullList) {
+    const settings = await storage.loadSettings();
+    if (!settings.refining_read) {
+      settings.refining_read = true;
+      await storage.saveSettings(settings);
+    }
+  }
   if (totalChanged) await storage.savePendingRefining(pendingRefining);
   if (!totalChanged) return;
 
@@ -757,6 +809,11 @@ async function recalculateManifestSelection() {
     // A Global Research boost cutting every recipe's materials (AssemblyPlan.
     // materialCut) - shown on the row, since such boosts run out.
     item.discount = assemblyPlans[item.name]?.materialCut || null;
+    // Not researched yet: still farmed (its recipe is known from the
+    // Galactic Exchange), but no Assembler can make it - the row says so
+    // instead of a time. The Research Skill it needs, or 0 when unknown.
+    const plan = assemblyPlans[item.name];
+    item.research_locked = plan?.isResearchLocked() ? (plan.research.skillRequired ?? 0) : null;
   }
   // stored.buy mixes two different reasons an item ended up here (see
   // toStorableToMineData()'s own comment on that array): deliberately
@@ -837,30 +894,6 @@ async function handleSetManifestOreChoice(materialName, oreName) {
   await recalculateManifestSelection();
 }
 
-// Lets the in-page Manifest overlay's "Mark Complete" button (js/overlay-
-// manifest.js) declare the currently-selected Blueprint/Build Order done:
-// clears its ore-source picks (see storage.js's manifestOreChoices), then
-// deselects so
-// the overlay falls back to its empty state instead of showing numbers for a
-// selection whose tracking data was just wiped. Deliberately never touches
-// the underlying Blueprint or Build Order itself - unlike the dashboard's
-// own "Mark Build Complete" (tab-plan.js), which deletes the build, this is
-// scoped entirely to the overlay's own tracking data, never the saved plan.
-async function handleMarkManifestSelectionComplete() {
-  const selection = await storage.loadManifestSelection();
-  if (!selection) return;
-  const key = storage.manifestSelectionKey(selection);
-
-  const manifestOreChoices = await storage.loadManifestOreChoices();
-  if (key in manifestOreChoices) {
-    delete manifestOreChoices[key];
-    await storage.saveManifestOreChoices(manifestOreChoices);
-  }
-
-  await storage.saveManifestSelection(null);
-  await recalculateManifestSelection();
-}
-
 // Returning `true` (and eventually calling sendResponse) - rather than just
 // firing the handler and letting the listener return undefined - keeps the
 // message port open, which is what tells Chrome's MV3 service worker there's
@@ -884,6 +917,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items, msg.complete === true);
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
+  else if (msg.type === "fsc-exchange-plans-scrape") handled = handleExchangePlansScrape(msg.items);
   else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
   else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName, msg.storeCategory, msg.storeType);
   else if (msg.type === "fsc-assembler-registry-scrape") handled = handleAssemblerRegistryScrape(msg.counts);
@@ -895,7 +929,6 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   else if (msg.type === "fsc-lexicon-planets-scrape") handled = handleLexiconPlanetsScrape(msg.planetTypes);
   else if (msg.type === "fsc-switch-manifest-selection") handled = handleSwitchManifestSelection(msg.selection);
   else if (msg.type === "fsc-set-manifest-ore-choice") handled = handleSetManifestOreChoice(msg.materialName, msg.oreName);
-  else if (msg.type === "fsc-mark-manifest-selection-complete") handled = handleMarkManifestSelectionComplete();
   else if (msg.type === "fsc-set-item-acquisition-mode") handled = handleSetItemAcquisitionMode(msg.itemName, msg.mode);
   else if (msg.type === "fsc-switch-manifest-corp-selection") handled = handleSwitchManifestCorpSelection(msg.selection);
   else if (msg.type === "fsc-refresh-manifest-corp-selection") handled = recalculateManifestCorpSelection();

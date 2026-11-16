@@ -2,6 +2,32 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 4.4 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-15)
+
+### Release notes (public)
+
+- **Every Assembly recipe from the Galactic Exchange.** Open Galactic Exchange → Assembler Plans (All Plans lists all 97) and every plan's full recipe and Captain level are saved, including plans you haven't unlocked yet, so you can plan ahead. The Exchange shows base rates only, so your own R&D-boosted rate is kept wherever the Assembly Facility (Configure Production) has shown it; a plan with only the base rate says so on the Assembly tab and in Plan a Build ("at base rate") until you open it there.
+- **Works with the game's new R&D Office and Skills screens.** Open the R&D Office's Research plans tab and each plan's research level, Research Skill needed and progress are read as before; open Skills (Ship skills tab) and your Manufacturing and Engineering levels are read as before.
+- **Farm ahead for plans you haven't researched.** An Assembly item whose plan isn't researched yet still lists its materials in the Manifest, so you can farm them now, and shows **Research Lvl N req** (in amber) instead of a time, so it's clear the Assembler can't make it yet.
+- **Track what you're working on.** A ☆ button beside the Manifest's Farm: dropdown stars the selected Blueprint or Build Order, and starred ones stay at the top of the list under **★ Tracked**, in both Personal Farm and Corp. Tracked blueprints follow the class filter like the rest of the list (all of them under All classes, only Corvettes under Corvette); tracked Build Orders always show. Click ★ again to untrack it.
+- **The Manifest's Complete button is gone.** It cleared the manual batch counts, which the game's refinery screens now keep up to date by themselves; pick another Blueprint or Build Order, or "-- Select --", to move on.
+- **Manifest Setup lists more of the game's screens.** New steps:
+  - "Load every assembly recipe" (Galactic Exchange → Assembler Plans → All Plans), before the Assembly Facility step, which is now "Load your assembly rates" for your own R&D-boosted rates;
+  - "Read your assemblers" (Info → Assemblers) and "Read your refining" (Info → Refining), beside "Read your harvesters" (Info → Harvesters), which now ticks off once that tab is read even if you have no harvesters out.
+
+### Notes for reviewers (private)
+
+Update to 4.3 (live). No permission changes; still no network requests.
+
+**New page-read surface, read only while that screen is open:**
+
+- **Galactic Exchange › Assembler Plans** (`content.js`, `scrapeExchangePlans()`): found by the "Galactic Exchange" heading and a grid header row with the "Name", "Produces", "Rate" and "Cap Lv" columns. Reads each row's plan name, recipe line ("Iron Ore ×50 · ..."), rate, Captain level and R&D level. Saved through a new `fsc-exchange-plans-scrape` message to `background.js` (`handleExchangePlansScrape()`). `querySelectorAll` and `textContent` only, like every other reader - no clicks or page changes.
+
+**Changed page read:**
+
+- **R&D Office** (`content.js`, `scrapeResearchPlans()`), rewritten for the game's redesigned screen: found by its "Research and Development Office" title, read only while its "Research plans" tab is selected (`aria-pressed`). Reads each plan card's name, level pips (`classList`), "Skill N" / "Needs Research N" text and RUNNING flag, and each bay card's "N of M%" progress. Same `fsc-research-scrape` message as before.
+- **Skills window** (`content.js`, `skillsPanel()` / `scrapeSkillRows()`), rewritten for the game's redesigned window: found by its "Skills" title inside the open panel. Reads each skill row's name and level number (Manufacturing and Engineering are used). Same `fsc-skills-scrape` message as before; the Captain level and hold sizes are still read from the top bar.
+
 ## 4.3 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-11; live on Firefox, Edge and Chrome 2026-11-12)
 
 ### Release notes (public)

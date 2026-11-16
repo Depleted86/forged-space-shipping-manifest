@@ -473,7 +473,7 @@ export function initPlanTab(app, container) {
         } else {
           const assemblers = assemblersFor(app.settings, name);
           const hours = assemblyHoursWith(assemblyHours[name], assemblers);
-          const hoursText = assemblers === 0 ? "idle - no Assembler making it" : hours != null ? formatHours(hours) : "rate unknown";
+          const hoursText = assemblers === 0 ? "idle - no Assembler making it" : hours != null ? `${formatHours(hours)}${app.assemblyPlans[name]?.rateIsBase ? " at base rate" : ""}` : "rate unknown";
           // Still planned (so players can plan ahead), but flagged - the
           // Assembler won't take this plan until it's researched.
           const locked = app.assemblyPlans[name]?.isResearchLocked();

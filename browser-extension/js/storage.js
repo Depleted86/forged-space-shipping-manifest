@@ -41,13 +41,13 @@ export const DEFAULT_SETTINGS = {
   // before, since only raw ore actually goes into the Ore Hold.
   has_ore_hold: false,
   ore_hold_capacity: 600,
-  // The player's Manufacturing Skill, read from the Character Skills window - flags
+  // The player's Manufacturing Skill, read from the Skills window - flags
   // blueprints that need more than this (store.mfgSkill). null = not set.
   manufacturing_skill: null,
   // The player's Captain level, read from the game's HUD - flags blueprints
   // whose captainLevel is above it. null = not seen yet.
   captain_level: null,
-  // The player's Engineering skill, read from the Character Skills window -
+  // The player's Engineering skill, read from the Skills window -
   // compared with a module blueprint's store.engReq (needed to fit it).
   engineering_skill: null,
   // Each new game session, remind the player to open Commercial Storage and
@@ -60,6 +60,12 @@ export const DEFAULT_SETTINGS = {
   // (assembler_counts_read) has none, and shows as idle.
   assembler_counts: {},
   assembler_counts_read: false,
+  // Set once the Galactic Exchange's Assembler Plans list has been read -
+  // ticks off its Manifest Setup step.
+  exchange_plans_read: false,
+  // Set once Info > Refining (every refinery's jobs) has been read - ticks
+  // off its Manifest Setup step.
+  refining_read: false,
   // Share of every Assembly recipe's materials a Global Research boost is
   // cutting (0.3), from the Assembly Facility's "Assembler Efficiency" badge;
   // 0 when none is on. See AssemblyPlan.materialCut.
@@ -90,6 +96,7 @@ const KEYS = {
   manifestCorpToMineData: "manifestCorpToMineData",
   refineryJobs: "refineryJobs",
   buildLabels: "buildLabels",
+  trackedSelections: "trackedSelections",
   gettingStarted: "gettingStarted",
   harvesterSyncMeta: "harvesterSyncMeta",
 };
@@ -241,6 +248,7 @@ export async function loadAssemblyPlans() {
     plan.materialCut = cut;
     plan.captainLevel = entry.captain_level != null ? entry.captain_level : null;
     plan.research = entry.research ?? null;
+    plan.rateIsBase = entry.rate_is_base === true;
     assemblyPlans[outputItem] = plan;
   }
   if (Object.values(raw).some((entry) => entry && (entry.base_requirements || entry.discount != null))) await saveAssemblyPlans(assemblyPlans);
@@ -250,7 +258,7 @@ export async function loadAssemblyPlans() {
 export async function saveAssemblyPlans(assemblyPlans) {
   const raw = {};
   for (const [outputItem, plan] of Object.entries(assemblyPlans)) {
-    raw[outputItem] = { rate_per_hour: plan.ratePerHour, requirements: { ...plan.requirements }, captain_level: plan.captainLevel ?? null, research: plan.research ?? null };
+    raw[outputItem] = { rate_per_hour: plan.ratePerHour, requirements: { ...plan.requirements }, captain_level: plan.captainLevel ?? null, research: plan.research ?? null, rate_is_base: plan.rateIsBase === true };
   }
   await setKey(KEYS.assemblyPlans, raw);
 }
@@ -506,6 +514,19 @@ export async function loadBuildLabels() {
 
 export async function saveBuildLabels(labels) {
   await setKey(KEYS.buildLabels, labels);
+}
+
+// The Manifest overlay's ★ Tracked list: Blueprints and Build Orders the
+// player starred to work on next, as the "Farm:" dropdowns' option values
+// ("blueprint:<name>" / "build:<id>"), in the order they were starred.
+// Shared by the Personal and Corp dropdowns; listed above everything else.
+export async function loadTrackedSelections() {
+  const tracked = await getKey(KEYS.trackedSelections, []);
+  return Array.isArray(tracked) ? tracked.filter((v) => typeof v === "string") : [];
+}
+
+export async function saveTrackedSelections(tracked) {
+  await setKey(KEYS.trackedSelections, tracked);
 }
 
 // The in-game "Manifest Setup" window (js/overlay-setup.js): whether the

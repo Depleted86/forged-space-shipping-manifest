@@ -52,7 +52,12 @@ let edgeHandleEl = null;
 let selectionRowEl = null;
 let selectionSelectEl = null;
 let selectionInfoEl = null;
-let markCompleteBtn = null;
+// ★ buttons beside the Personal and Corp "Farm:" dropdowns, and the starred
+// entries they share (storage.js's trackedSelections) - see
+// appendTrackedGroup().
+let trackBtn = null;
+let corpTrackBtn = null;
+let trackedSelections = [];
 // Ship-class filter for the Blueprints group of both "Farm:" dropdowns
 // (Personal and Corp share one choice) - see blueprintShipClasses().
 let blueprintClassFilter = "";
@@ -99,7 +104,7 @@ let overlayVisible = false;
 let builds = {}; // buildName -> [[kind, itemName, qty], ...], mirrors storage.js's `builds` key
 let blueprints = {}; // blueprintName -> Blueprint, mirrors storage.js's `blueprints` key
 // The player's Manufacturing Skill and Captain level (from settings, read
-// from Character Skills and the top bar) - blueprints needing more are
+// from the Skills window and the top bar) - blueprints needing more are
 // marked in the dropdowns (markRequirements()).
 let playerLevels = { manufacturing_skill: null, captain_level: null };
 // The settings assemblersFor() reads (assembler_counts and whether Info >
@@ -309,24 +314,34 @@ const STYLE = `
     border-color: #22d3ee;
     outline: none;
   }
-  .fsc-mark-complete-btn {
+  .fsc-research-locked {
+    color: #fbbf24;
+  }
+  .fsc-track-btn {
     flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
     background: #172033;
     color: #94a3b8;
     border: 1px solid #334155;
     border-radius: 5px;
-    padding: 3px 7px;
-    font-size: 11px;
-    line-height: 1.2;
-    white-space: nowrap;
+    font-size: 13px;
+    line-height: 1;
     cursor: pointer;
   }
-  .fsc-mark-complete-btn:hover, .fsc-mark-complete-btn:focus-visible {
+  .fsc-track-btn:hover, .fsc-track-btn:focus-visible {
     color: #67e8f9;
     border-color: #22d3ee;
     outline: none;
   }
-  .fsc-mark-complete-btn:disabled {
+  .fsc-track-btn.fsc-tracked {
+    color: #facc15;
+    border-color: #a16207;
+  }
+  .fsc-track-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
@@ -610,6 +625,11 @@ export function initManifestOverlay() {
         refreshCorpSelectionSelector();
       });
     }
+    if (changes.trackedSelections) {
+      trackedSelections = Array.isArray(changes.trackedSelections.newValue) ? changes.trackedSelections.newValue : [];
+      refreshSelectionSelector();
+      refreshCorpSelectionSelector();
+    }
     if (changes.manifestSelection) {
       manifestSelection = changes.manifestSelection.newValue || null;
       refreshSelectionSelector();
@@ -627,7 +647,9 @@ export function initManifestOverlay() {
     storage.loadBlueprints(),
     storage.loadBuildLabels(),
     storage.loadSettings(),
-  ]).then(([result, loadedBuilds, loadedBlueprints, loadedBuildLabels, loadedSettings]) => {
+    storage.loadTrackedSelections(),
+  ]).then(([result, loadedBuilds, loadedBlueprints, loadedBuildLabels, loadedSettings, loadedTracked]) => {
+    trackedSelections = loadedTracked;
     playerLevels = { manufacturing_skill: loadedSettings.manufacturing_skill ?? null, captain_level: loadedSettings.captain_level ?? null };
     assemblerSettings = { assembler_counts: loadedSettings.assembler_counts || {}, assembler_counts_read: !!loadedSettings.assembler_counts_read };
     personalData = result.manifestToMineData || { available: false };
@@ -763,33 +785,9 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-refresh-manifest-selection" }).catch(() => {});
   });
 
-  // "Mark Complete" - declares the currently-selected Blueprint/Build Order
-  // done: clears ITS OWN ore-source picks (see storage.js's
-  // manifestOreChoices) and deselects, so a finished print doesn't leave
-  // stale settings behind for the next one. Deliberately never deletes the underlying
-  // Blueprint or Build Order - only the dashboard's own "Mark Build
-  // Complete" (tab-plan.js) does that, and on purpose stays a separate,
-  // more deliberate action. Only meaningful for Personal Farm (batches/ore
-  // choices are a Personal-view-only concept - see refreshSelectionSelector()
-  // enabling this button, and storage.js's manifestOreChoices comment on why
-  // Corp has no equivalent).
-  markCompleteBtn = document.createElement("button");
-  markCompleteBtn.type = "button";
-  markCompleteBtn.className = "fsc-mark-complete-btn";
-  markCompleteBtn.textContent = "Complete";
-  markCompleteBtn.title = "Mark this Blueprint/Build Order complete - clears its batch counts and ore-source picks, then deselects";
-  markCompleteBtn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (!manifestSelection) return;
-    const label =
-      manifestSelection.type === "blueprint"
-        ? manifestSelection.name
-        : buildLabels[manifestSelection.name] || `Build ${manifestSelection.name}`;
-    if (!confirm(`Mark "${label}" complete? This clears its batch counts and ore-source picks (not the Blueprint/Build Order itself), then deselects it.`)) return;
-    browser.runtime.sendMessage({ type: "fsc-mark-manifest-selection-complete" }).catch(() => {});
-  });
+  trackBtn = makeTrackButton(() => manifestSelection);
 
-  selectionRowEl.append(selectionLabel, makeClassFilter("fsc-class-filter", "personal"), selectionSelectEl, refreshBtn, markCompleteBtn, selectionInfoEl);
+  selectionRowEl.append(selectionLabel, makeClassFilter("fsc-class-filter", "personal"), selectionSelectEl, trackBtn, refreshBtn, selectionInfoEl);
 
   // Corp's own Blueprint/Build Order switcher - exact mirror of the
   // Personal one above (same manifestCorpSelection/manifestCorpToMineData
@@ -832,7 +830,9 @@ function buildPanel() {
     browser.runtime.sendMessage({ type: "fsc-refresh-manifest-corp-selection" }).catch(() => {});
   });
 
-  corpSelectionRowEl.append(corpSelectionLabel, makeClassFilter("fsc-corp-class-filter", "corp"), corpSelectionSelectEl, corpRefreshBtn, corpSelectionInfoEl);
+  corpTrackBtn = makeTrackButton(() => manifestCorpSelection);
+
+  corpSelectionRowEl.append(corpSelectionLabel, makeClassFilter("fsc-corp-class-filter", "corp"), corpSelectionSelectEl, corpTrackBtn, corpRefreshBtn, corpSelectionInfoEl);
 
   viewToggleEl = document.createElement("div");
   viewToggleEl.className = "fsc-view-toggle";
@@ -959,6 +959,71 @@ function refreshClassFilters() {
   }
 }
 
+// ★ - stars/unstars the row's current selection, so a Blueprint or Build
+// Order the player decided to work on stays at the top of both "Farm:"
+// dropdowns (appendTrackedGroup()) instead of being lost in the full list.
+// Saved straight to storage; the onChanged listener refreshes both rows.
+function makeTrackButton(currentSelection) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "fsc-track-btn";
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    const selection = currentSelection();
+    if (!selection) return;
+    const value = `${selection.type}:${selection.name}`;
+    const next = trackedSelections.includes(value) ? trackedSelections.filter((v) => v !== value) : [...trackedSelections, value];
+    trackedSelections = next;
+    refreshSelectionSelector();
+    refreshCorpSelectionSelector();
+    storage.saveTrackedSelections(next).catch(() => {});
+  });
+  return btn;
+}
+
+function refreshTrackButton(btn, selection) {
+  if (!btn) return;
+  const tracked = !!selection && trackedSelections.includes(`${selection.type}:${selection.name}`);
+  btn.disabled = !selection;
+  btn.textContent = tracked ? "★" : "☆";
+  btn.classList.toggle("fsc-tracked", tracked);
+  btn.title = !selection ? "Pick a Blueprint or Build Order to track it" : tracked ? "Stop tracking - moves it back to its usual place in the list" : "Track - keeps it at the top of the list under ★ Tracked";
+  btn.setAttribute("aria-pressed", String(tracked));
+  btn.setAttribute("aria-label", tracked ? "Stop tracking" : "Track");
+}
+
+// The ★ Tracked optgroup at the top of a "Farm:" dropdown, in the order they
+// were starred. Blueprints follow the class filter like the rest of the list
+// (all of them under All classes; a Frigate one hidden while Corvette is
+// picked), except the one already selected; Build Orders aren't filtered by
+// class anywhere, so they always show. Entries whose Blueprint or Build
+// Order no longer exists are skipped (kept in storage, so one that comes
+// back is tracked again). Returns the values listed, which the groups below
+// leave out so nothing appears twice.
+function appendTrackedGroup(select, selection) {
+  const listed = new Set();
+  const group = document.createElement("optgroup");
+  group.label = "★ Tracked";
+  for (const value of trackedSelections) {
+    const sep = value.indexOf(":");
+    const type = value.slice(0, sep);
+    const name = value.slice(sep + 1);
+    const opt = document.createElement("option");
+    opt.value = value;
+    const selected = selection?.type === type && selection.name === name;
+    if (type === "blueprint" && blueprints[name] && (inShipClass(blueprints[name], blueprintClassFilter) || selected)) {
+      opt.textContent = blueprintOptionLabel(name, blueprints[name]);
+      group.appendChild(markRequirements(opt, blueprints[name], playerLevels));
+    } else if (type === "build" && builds[name]) {
+      opt.textContent = buildLabels[name] || `Build ${name}`;
+      group.appendChild(opt);
+    } else continue;
+    listed.add(value);
+  }
+  if (listed.size > 0) select.appendChild(group);
+  return listed;
+}
+
 // The Blueprints a "Farm:" dropdown lists under the current class filter -
 // always including the one already selected, so the dropdown never shows
 // blank just because the filter hides it - by Manufacturing Skill needed.
@@ -995,10 +1060,13 @@ function refreshSelectionSelector() {
   placeholder.textContent = "-- Select --";
   selectionSelectEl.appendChild(placeholder);
 
-  const blueprintNames = filteredBlueprintNames(manifestSelection);
+  const tracked = appendTrackedGroup(selectionSelectEl, manifestSelection);
+  const blueprintNames = filteredBlueprintNames(manifestSelection).filter((name) => !tracked.has(`blueprint:${name}`));
   appendBlueprintGroups(selectionSelectEl, blueprintNames);
 
-  const buildNames = Object.keys(builds).sort((a, b) => Number(a) - Number(b));
+  const buildNames = Object.keys(builds)
+    .filter((name) => !tracked.has(`build:${name}`))
+    .sort((a, b) => Number(a) - Number(b));
   if (buildNames.length > 0) {
     const group = document.createElement("optgroup");
     group.label = "Build Orders (Dashboard)";
@@ -1012,7 +1080,7 @@ function refreshSelectionSelector() {
   }
 
   selectionSelectEl.value = manifestSelection ? `${manifestSelection.type}:${manifestSelection.name}` : "";
-  if (markCompleteBtn) markCompleteBtn.disabled = !manifestSelection;
+  refreshTrackButton(trackBtn, manifestSelection);
 
   if (manifestSelection?.type === "blueprint") {
     const blueprint = blueprints[manifestSelection.name];
@@ -1048,10 +1116,13 @@ function refreshCorpSelectionSelector() {
   placeholder.textContent = "-- Select --";
   corpSelectionSelectEl.appendChild(placeholder);
 
-  const blueprintNames = filteredBlueprintNames(manifestCorpSelection);
+  const tracked = appendTrackedGroup(corpSelectionSelectEl, manifestCorpSelection);
+  const blueprintNames = filteredBlueprintNames(manifestCorpSelection).filter((name) => !tracked.has(`blueprint:${name}`));
   appendBlueprintGroups(corpSelectionSelectEl, blueprintNames);
 
-  const buildNames = Object.keys(builds).sort((a, b) => Number(a) - Number(b));
+  const buildNames = Object.keys(builds)
+    .filter((name) => !tracked.has(`build:${name}`))
+    .sort((a, b) => Number(a) - Number(b));
   if (buildNames.length > 0) {
     const group = document.createElement("optgroup");
     group.label = "Build Orders (Dashboard)";
@@ -1065,6 +1136,7 @@ function refreshCorpSelectionSelector() {
   }
 
   corpSelectionSelectEl.value = manifestCorpSelection ? `${manifestCorpSelection.type}:${manifestCorpSelection.name}` : "";
+  refreshTrackButton(corpTrackBtn, manifestCorpSelection);
 
   if (manifestCorpSelection?.type === "blueprint") {
     const blueprint = blueprints[manifestCorpSelection.name];
@@ -1452,10 +1524,18 @@ function renderAssemblyRow(item) {
   row.className = "fsc-row fsc-assembly-row fsc-row-flex fsc-row-clickable";
   const assemblers = assemblersFor(assemblerSettings, item.name);
   const hours = assemblyHoursWith(item.hours, assemblers);
-  const hoursText = assemblers === 0 ? "idle" : hours != null ? formatHours(hours) : "rate unknown";
+  // A plan not researched yet can be farmed for but not made, so the row
+  // names the Research level it needs rather than a time.
+  const locked = item.research_locked != null;
+  const hoursText = locked
+    ? item.research_locked > 0 ? `Research Lvl ${item.research_locked} req` : "not researched"
+    : assemblers === 0 ? "idle" : hours != null ? formatHours(hours) : "rate unknown";
   const label = document.createElement("span");
   label.textContent = `${item.name}: ${Math.round(item.need).toLocaleString()} (${hoursText})`;
-  label.title = assemblers === 0 ? `${label.textContent} - no Assembler is making it` : assemblers > 1 ? `${label.textContent} with ${assemblers} Assemblers` : label.textContent;
+  if (locked) label.className = "fsc-research-locked";
+  label.title = locked
+    ? `${label.textContent} - you can farm its materials now, but no Assembler can make it until it's researched in the R&D Office${item.research_locked > 0 ? ` (needs Research Skill ${item.research_locked})` : ""}`
+    : assemblers === 0 ? `${label.textContent} - no Assembler is making it` : assemblers > 1 ? `${label.textContent} with ${assemblers} Assemblers` : label.textContent;
   const controls = document.createElement("span");
   controls.className = "fsc-row-controls";
   if (item.discount) controls.append(buildDiscountMark(item.discount));

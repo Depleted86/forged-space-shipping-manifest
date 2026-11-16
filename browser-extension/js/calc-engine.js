@@ -168,7 +168,7 @@ export function assemblyHoursWith(hours, assemblers) {
 }
 
 // Whether a blueprint needs more Manufacturing Skill than the player has
-// (read from Character Skills) - false while either isn't known.
+// (read from the Skills window) - false while either isn't known.
 export function blueprintSkillTooLow(blueprint, manufacturingSkill) {
   const need = blueprint?.store?.mfgSkill;
   return need != null && manufacturingSkill != null && need > manufacturingSkill;
@@ -239,7 +239,7 @@ export class AssemblyPlan {
     // See Blueprint.captainLevel above - same informational-only stat, not
     // used by any calculation.
     this.captainLevel = null;
-    // R&D status from the game's R&D Office "Select Research Plan" list, or
+    // R&D status from the game's R&D Office's Research plans tab, or
     // null for plans that aren't R&D-gated (or haven't been seen there):
     // { level, skillRequired, progress, active } - level 0 means not yet
     // researched, so the plan can't be queued at an Assembler. Display-only;
@@ -253,6 +253,10 @@ export class AssemblyPlan {
     // and the cut is worked out here, rounded the way the game rounds them
     // (22 -> 15, 153 -> 107).
     this.materialCut = 0;
+    // True while ratePerHour is the Galactic Exchange's base rate - this
+    // player's R&D-boosted rate is only shown in the Assembly Facility's
+    // Configure Production list, which clears it.
+    this.rateIsBase = false;
   }
 
   isResearchLocked() {

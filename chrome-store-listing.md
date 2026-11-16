@@ -56,7 +56,7 @@ Tools (Chrome: Productivity was not selectable, 2026-11-06). Edge: Productivity.
 Helps Forged Space players plan mining, refining, harvesting and assembly
 for their builds. It reads the game screens the player opens on
 forgedspace.com (storage, blueprint stores, assembly and research plans,
-skills) to keep a local plan up to date, and shows what's left to gather in
+refining, harvesters, skills) to keep a local plan up to date, and shows what's left to gather in
 an in-game Manifest overlay.
 
 ## Permission justifications
@@ -70,9 +70,11 @@ and settings. Nothing is ever sent off the device.
 **Host permission: https://forgedspace.com/***
 The only host is https://forgedspace.com/*, the game itself. The content
 script reads the game screens the player opens there (Commercial Storage,
-Corp Store, blueprint stores, Assembly Facility, R&D Office, Character
-Skills, the Systems Lexicon and the HUD) using textContent only, to keep
-the local plan in sync, and draws the extension's own Manifest overlay. It
+Corp Store, blueprint stores, the Galactic Exchange's Assembler Plans,
+Assembly Facility, R&D Office, Refining Center, the Information Center's
+Harvesters, Assemblers and Refining tabs, Skills, the Systems Lexicon and
+the HUD) using textContent only, to keep the local plan in sync, and draws
+the extension's own Manifest overlay. It
 never clicks, submits or changes anything on the page, and makes no
 network requests.
 

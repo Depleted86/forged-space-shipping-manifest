@@ -20,12 +20,12 @@ export function initBlueprintsTab(app, container) {
   const classFilter = el("select", { id: "blueprints-class-filter", style: "flex: 1; min-width: 0;" });
   classFilter.addEventListener("change", () => refreshListbox());
   // The player's skills and Captain level, as last read from the game
-  // (Character Skills window / HUD) - shown, not editable.
+  // (Skills window / HUD) - shown, not editable.
   const skillsInfo = el("div", { class: "hint" });
   const knownCount = el("div", { class: "hint" });
   function refreshSkillsInfo() {
     const show = (n) => n ?? "?";
-    skillsInfo.textContent = `Your Manufacturing ${show(app.settings.manufacturing_skill)}, Engineering ${show(app.settings.engineering_skill)}, Captain level ${show(app.settings.captain_level)} - read from the game's Character Skills window and top bar.`;
+    skillsInfo.textContent = `Your Manufacturing ${show(app.settings.manufacturing_skill)}, Engineering ${show(app.settings.engineering_skill)}, Captain level ${show(app.settings.captain_level)} - read from the game's Skills window and top bar.`;
   }
 
   const nameHeading = el("h3", { class: "section-title" });
@@ -187,7 +187,7 @@ export function initBlueprintsTab(app, container) {
   refreshListbox();
   refreshDetail();
 
-  // Skills/Captain level changed (a Character Skills or HUD read).
+  // Skills/Captain level changed (a Skills window or HUD read).
   app.refreshHooks.blueprintsSkill = () => {
     refreshSkillsInfo();
     refreshListbox();

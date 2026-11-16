@@ -479,61 +479,150 @@ function checkAssemblerPlans() {
     .catch(() => {});
 }
 
-// R&D Office > Select Research Plan: every research plan in the game,
-// researched or not, each row showing its name, an "Lv.N" badge once
-// researched, the Research Skill it needs, and progress if it's being
-// researched. No recipes here - this is where locked plans come from, so the
-// Assembly tab can list them (marked locked) before the Assembly Facility
-// ever shows them. Opened via an empty slot's "Select Plan" button.
-const RESEARCH_PANEL_TITLE = "Select Research Plan";
-let lastResearchSnapshot = null;
+// Galactic Exchange > Assembler Plans (All Plans / Captain Level / R&D
+// Unlocked): one grid row per plan - name with its full recipe under it
+// ("Iron Ore ×50 · Refined Metal ×60"), base rate ("4/hr"), Captain level
+// ("Lv 5" or "—") and R&D level ("R&D Lv 3" or "—"). All Plans lists every
+// plan in the game, unlocked or not, so one visit fills in every recipe. The
+// rate is the base one, not this player's R&D-boosted rate, so background.js
+// only uses it for plans the Assembly Facility hasn't shown yet.
+const EXCHANGE_PLAN_COLUMNS = ["Name", "Produces", "Rate", "Cap Lv"];
+let lastExchangePlansSnapshot = null;
 
-function researchPanel() {
-  for (const h3 of document.querySelectorAll("h3")) {
-    if (h3.textContent.trim() === RESEARCH_PANEL_TITLE) return h3.parentElement;
+// The Assembler Plans grid's header row: a CSS grid of <span>s whose text
+// includes every EXCHANGE_PLAN_COLUMNS heading. Other Exchange categories
+// share the grid but not the Produces/Cap Lv columns.
+function exchangePlansHeader() {
+  if (!findLeafText("h3", "Galactic Exchange")) return null;
+  for (const el of document.querySelectorAll("div.grid")) {
+    const headings = Array.from(el.children, (child) => child.textContent.trim());
+    if (EXCHANGE_PLAN_COLUMNS.every((h) => headings.includes(h))) return el;
   }
   return null;
 }
 
-// The row for a plan name: the outermost ancestor that still contains only
-// this one <h4>, so no layout classes are needed to find it.
-function researchRowFor(h4, panel) {
-  let row = h4;
-  while (row.parentElement && row.parentElement !== panel && row.parentElement.querySelectorAll("h4").length === 1) {
-    row = row.parentElement;
+// "Iron Ore ×50 · Refined Metal ×60" -> { "Iron Ore": 50, "Refined Metal": 60 }
+function parseExchangeRecipe(text) {
+  const requirements = {};
+  for (const part of (text || "").split("·")) {
+    const m = part.trim().match(/^(.+?)\s*[×x]\s*([\d,]+)$/);
+    if (m) requirements[m[1].trim()] = parseInt(m[2].replace(/,/g, ""), 10);
   }
-  return row;
+  return requirements;
+}
+
+function scrapeExchangePlans(header) {
+  const headings = Array.from(header.children, (child) => child.textContent.trim());
+  const col = (name) => headings.indexOf(name);
+  const rdCol = headings.findIndex((h) => /^R&D/i.test(h));
+  const items = [];
+  for (const row of header.parentElement.querySelectorAll("div.grid")) {
+    if (row === header || row.children.length !== headings.length) continue;
+    const cells = row.children;
+    const nameCell = cells[col("Name")];
+    const name = nameCell.children[0]?.textContent.trim();
+    const requirements = parseExchangeRecipe(nameCell.children[1]?.textContent);
+    if (!name || Object.keys(requirements).length === 0) continue;
+    const cap = cells[col("Cap Lv")].textContent.trim().match(/^Lv\s*(\d+)$/i);
+    const rd = rdCol >= 0 ? cells[rdCol].textContent.trim().match(/^R&D\s*Lv\s*(\d+)$/i) : null;
+    items.push({
+      name,
+      requirements,
+      ratePerHour: parseRate(cells[col("Rate")].textContent),
+      captainLevel: cap ? parseInt(cap[1], 10) : null,
+      rdLevel: rd ? parseInt(rd[1], 10) : null,
+    });
+  }
+  return items;
+}
+
+function checkExchangePlans() {
+  const header = exchangePlansHeader();
+  const items = header ? scrapeExchangePlans(header) : [];
+  // An empty category or a search with no matches shows the header alone.
+  const empty = !!findLeafText("span", "0 items in category");
+  reportScreenRead("the Exchange's Assembler Plans", !!header && !empty, items.length > 0);
+  if (items.length === 0) return;
+  const snapshot = JSON.stringify(items);
+  if (snapshot === lastExchangePlansSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-exchange-plans-scrape", items })
+    .then(() => { lastExchangePlansSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// R&D Office (Research and Development Office), Research plans tab: a card
+// per research plan in the game, researched or not - its name, a pip per
+// level (filled once done, part-filled while under way), the Research Skill
+// it needs ("Skill 3", or "Needs Research 13" while locked; a maxed plan
+// shows its output instead), and a RUNNING flag while a bay is researching
+// it. The bay cards on the left give a running plan's progress ("Researching
+// level 3 · 13 of 300%"). No recipes here - this is where locked plans come
+// from, so the Assembly tab can list them (marked locked) before the
+// Assembly Facility ever shows them. Searching or filtering the grid lists
+// fewer plans; background.js only updates the ones listed.
+const RESEARCH_PANEL_TITLE = "Research and Development Office";
+const RESEARCH_PLANS_TAB = /^Research plans\b/;
+let lastResearchSnapshot = null;
+
+function researchPanel() {
+  for (const ttl of document.querySelectorAll(".ttl")) {
+    if (ttl.textContent.trim() === RESEARCH_PANEL_TITLE) return ttl.closest("[data-panel-open]") || ttl.parentElement;
+  }
+  return null;
+}
+
+// True while the Research plans tab (not Global research) is the one shown.
+function researchPlansTabOpen(panel) {
+  for (const tab of panel.querySelectorAll("button[aria-pressed]")) {
+    if (RESEARCH_PLANS_TAB.test(tab.textContent.trim())) return tab.getAttribute("aria-pressed") === "true";
+  }
+  return false;
+}
+
+// { planName: "13/300%" } from the bay cards of plans being researched.
+function researchBayProgress(panel) {
+  const progress = {};
+  for (const bay of panel.querySelectorAll(".bay")) {
+    const name = bay.querySelector(".what b")?.textContent.trim();
+    const m = (bay.querySelector(".what span")?.textContent || "").match(/(\d+)\s*of\s*(\d+)\s*%/);
+    if (name && m) progress[name] = `${m[1]}/${m[2]}%`;
+  }
+  return progress;
 }
 
 function scrapeResearchPlans() {
   const panel = researchPanel();
-  if (!panel) return [];
+  if (!panel || !researchPlansTabOpen(panel)) return [];
+  const bayProgress = researchBayProgress(panel);
   const plans = [];
-  for (const h4 of panel.querySelectorAll("h4")) {
-    const name = h4.textContent.trim();
+  for (const card of panel.querySelectorAll("button.plan")) {
+    const name = card.querySelector("b")?.textContent.trim();
     if (!name) continue;
-    let level = 0;
-    let skillRequired = null;
-    let progress = null;
-    let active = false;
-    for (const el of researchRowFor(h4, panel).querySelectorAll("span, p, div")) {
-      if (el.children.length > 0) continue;
-      const text = el.textContent.trim();
-      const lv = text.match(/^Lv\.?\s*(\d+)$/i);
-      if (lv) level = parseInt(lv[1], 10);
-      const skill = text.match(/^Requires Research Skill Level\s*(\d+)$/i);
-      if (skill) skillRequired = parseInt(skill[1], 10);
-      if (/^\d+\s*\/\s*\d+%$/.test(text)) progress = text.replace(/\s+/g, "");
-      if (text === "Active") active = true;
-    }
-    plans.push({ name, level, skillRequired, progress, active });
+    const line = card.querySelector(".ln")?.textContent || "";
+    // "Needs Research 13" on a locked card (its flag repeats it as "SKILL
+    // 13"), "Skill 3" on the rest - case matters, so the flag isn't read.
+    const skill = line.match(/Needs Research\s*(\d+)/) || line.match(/Skill\s*(\d+)/);
+    plans.push({
+      name,
+      level: card.querySelectorAll(".pips i.on").length,
+      skillRequired: skill ? parseInt(skill[1], 10) : null,
+      progress: bayProgress[name] ?? null,
+      active: !!card.querySelector(".flag.run"),
+    });
   }
   return plans;
 }
 
 function checkResearchPlans() {
   const plans = scrapeResearchPlans();
-  reportScreenRead("the R&D research plans", plans.length === 0 && !!researchPanel(), plans.length > 0);
+  const panel = researchPanel();
+  // A search or filter matching nothing empties the grid too - only an
+  // unfiltered, empty grid means the screen couldn't be read.
+  const filtered = !!panel?.querySelector('input[type="search"]')?.value || /\b0$/.test(panel?.querySelector(".seg button[aria-pressed='true']")?.textContent.trim() || "");
+  reportScreenRead("the R&D research plans", plans.length === 0 && !!panel && researchPlansTabOpen(panel) && !filtered, plans.length > 0);
   if (plans.length === 0) return;
   const snapshot = JSON.stringify(plans);
   if (snapshot === lastResearchSnapshot) return;
@@ -873,8 +962,9 @@ function findLeafText(selector, text) {
   return null;
 }
 
-// Character Skills window (the graduation-cap "Skills" button): a card per
-// skill, each an <h4> name with a "Level N" line beside it. Only the
+// Skills window (the graduation-cap "Skills" button): Ship skills and
+// Captain skills tabs, each a list of rows - a skill name in <b> and its
+// level in a .lv span, under group headings. Only the
 // Manufacturing and Engineering levels are read, so the Blueprints tab can
 // flag blueprints the player can't run (or modules they can't fit) without
 // the player typing them in. The Captain
@@ -882,18 +972,26 @@ function findLeafText(selector, text) {
 // which is always on screen; starship blueprints' "Level Req" is checked
 // against it. The same bar gives the ship's Cargo and Ore Hold capacities,
 // which set the mining trip size.
-const SKILLS_PANEL_TITLE = "Character Skills";
+const SKILLS_PANEL_TITLE = "Skills";
 let lastSkillsSnapshot = null;
 
-function scrapeSkillLevel(skillName) {
-  const title = [...document.querySelectorAll("h2")].find((h2) => h2.textContent.trim() === SKILLS_PANEL_TITLE);
-  if (!title) return null;
-  for (const h4 of document.querySelectorAll("h4")) {
-    if (h4.textContent.trim() !== skillName) continue;
-    const level = (h4.parentElement.textContent || "").match(/Level\s*(\d+)/i);
-    if (level) return parseInt(level[1], 10);
+// The open Skills window, found by its title - other windows have their own.
+function skillsPanel() {
+  for (const ttl of document.querySelectorAll("[data-panel-open] .ttl")) {
+    if (ttl.textContent.trim() === SKILLS_PANEL_TITLE) return ttl.closest("[data-panel-open]");
   }
   return null;
+}
+
+// { skillName: level } from the rows on the Skills window's open tab.
+function scrapeSkillRows(panel) {
+  const levels = {};
+  for (const row of panel ? panel.querySelectorAll("button.row") : []) {
+    const name = row.querySelector("b")?.textContent.trim();
+    const level = (row.querySelector(".lv")?.textContent || "").trim().match(/^(\d+)$/);
+    if (name && level) levels[name] = parseInt(level[1], 10);
+  }
+  return levels;
 }
 
 // The HUD bar's "Cargo 0/150" and, on ships that have one, "Ore Hold
@@ -930,17 +1028,15 @@ function scrapeCaptainLevel() {
 let setupWindows = null;
 
 function checkSkills() {
-  const manufacturing = scrapeSkillLevel("Manufacturing");
-  const engineering = scrapeSkillLevel("Engineering");
+  const panel = skillsPanel();
+  const skillLevels = scrapeSkillRows(panel);
+  const manufacturing = skillLevels.Manufacturing ?? null;
+  const engineering = skillLevels.Engineering ?? null;
   const captain = scrapeCaptainLevel();
   const holds = scrapeShipHolds();
-  // Manufacturing and Engineering are on the Ship Skills tab only, so the
-  // window counts as read when any skill card on the open tab reads the same
-  // way (a name with "Level N" beside it).
-  const skillsWindowOpen = !!findLeafText("h2", SKILLS_PANEL_TITLE);
-  const skillsRead =
-    manufacturing !== null || engineering !== null || [...document.querySelectorAll("h4")].some((h4) => /Level\s*\d+/i.test(h4.parentElement.textContent || ""));
-  reportScreenRead("Character Skills", skillsWindowOpen, skillsRead);
+  // Manufacturing and Engineering are on the Ship skills tab only, so the
+  // window counts as read when any row on the open tab reads the same way.
+  reportScreenRead("the Skills window", !!panel, Object.keys(skillLevels).length > 0);
   if (setupWindows) {
     if (manufacturing !== null || engineering !== null) setupWindows.noteRead("skills");
     // The top bar is only on screen once the player is in the game.
@@ -1309,6 +1405,7 @@ const pollIntervalIds = [
   setInterval(checkStorage, STORAGE_POLL_MS),
   setInterval(checkCorpStore, CORP_POLL_MS),
   setInterval(checkAssemblerPlans, ASSEMBLER_POLL_MS),
+  setInterval(checkExchangePlans, ASSEMBLER_POLL_MS),
   setInterval(checkResearchPlans, ASSEMBLER_POLL_MS),
   setInterval(checkBlueprintStore, ASSEMBLER_POLL_MS),
   setInterval(checkSkills, ASSEMBLER_POLL_MS),
