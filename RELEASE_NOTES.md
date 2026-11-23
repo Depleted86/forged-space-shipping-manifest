@@ -2,7 +2,17 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
-## 4.4 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-15)
+## 4.4.1 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-22)
+
+### Release notes (public)
+
+- Fixed: the Info → Assemblers step in Manifest Setup and the Refresh reminder didn't tick when none of your assemblers were making anything (or none were deployed), and your Asm counts weren't reset to idle. Info → Harvesters had the same problem with no harvesters out.
+
+### Notes for reviewers (private)
+
+Update to 4.4. No permission changes; still no network requests. Bug fix only: the Information Center's Assemblers and Harvesters readers (`content.js`, `scrapeAssemblerRegistry()` / `scrapeHarvesterRegistry()`) now also recognise an idle assembler row and an empty tab by its footer text ("Assembler Registry • Deployed: 0/5", "Harvester Registry • Galaxy Limit: 0/10"). Same read-only `querySelectorAll` / `textContent` pattern; same messages as before.
+
+## 4.4 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-15; live on Firefox and Chrome 2026-11-18, Edge 2026-11-22)
 
 ### Release notes (public)
 

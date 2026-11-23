@@ -1075,9 +1075,25 @@ function harvesterRegistry() {
   return null;
 }
 
+// With no harvesters out there may be no table at all; the footer
+// ("Harvester Registry • Galaxy Limit: 0/10") still shows the tab was read.
+const HARVESTER_REGISTRY_FOOTER = /Harvester Registry\s*•\s*Galaxy Limit:\s*(\d+)\s*\/\s*(\d+)/i;
+
+function harvesterRegistryFooter() {
+  for (const span of document.querySelectorAll("span")) {
+    const m = span.textContent.trim().match(HARVESTER_REGISTRY_FOOTER);
+    if (m) return { used: parseInt(m[1], 10), limit: parseInt(m[2], 10) };
+  }
+  return null;
+}
+
 function scrapeHarvesterRegistry() {
   const found = harvesterRegistry();
-  if (!found) return null;
+  if (!found) {
+    const footer = harvesterRegistryFooter();
+    if (!footer) return null;
+    return { harvesters: [], limit: footer.limit, rowCount: footer.used };
+  }
   const typeCol = found.heads.indexOf("Type");
   const resourceCol = found.heads.indexOf("Resource");
   const statusCol = found.heads.indexOf("Status");
@@ -1123,8 +1139,22 @@ function checkHarvesters() {
 // the Manifest overlay's "Asm:" counts (settings.assembler_counts) fill
 // themselves: how many assemblers are making each product. Found the same
 // way as the Harvester Registry above: by the table's column headings, only
-// inside the window whose footer reads "Assembler Registry".
+// inside the window whose footer reads "Assembler Registry". An idle
+// assembler's row has no product (blank or a dash), and with none deployed
+// there may be no table at all - the footer ("Deployed: 0/5") still shows
+// the tab was read, so both count as read, just with nothing being made.
+const ASSEMBLER_REGISTRY_FOOTER = /Assembler Registry\s*•\s*Deployed:\s*(\d+)\s*\/\s*\d+/i;
+const IDLE_PRODUCT = /^(?:[-–—]+|none|idle|not set|no product|empty)?$/i;
 let lastAssemblerRegistrySnapshot = null;
+
+// The registry footer's "Deployed: N" - null when the footer isn't shown.
+function assemblerRegistryDeployed() {
+  for (const span of document.querySelectorAll("span")) {
+    const m = span.textContent.trim().match(ASSEMBLER_REGISTRY_FOOTER);
+    if (m && /^Molecular|^Assembler/i.test(span.textContent.trim())) return parseInt(m[1], 10);
+  }
+  return null;
+}
 
 function assemblerRegistry() {
   for (const table of document.querySelectorAll("table")) {
@@ -1138,19 +1168,28 @@ function assemblerRegistry() {
   return null;
 }
 
+// { counts, read, rowCount } - read counts rows understood, idle ones
+// included; null when the Assemblers tab isn't open.
 function scrapeAssemblerRegistry() {
   const found = assemblerRegistry();
-  if (!found) return null;
+  if (!found) {
+    // No table: fine only when the footer says nothing is deployed.
+    const deployed = assemblerRegistryDeployed();
+    if (deployed === null) return null;
+    return { counts: {}, read: 0, rowCount: deployed };
+  }
   const productCol = found.heads.indexOf("Product");
+  const assemblerCol = found.heads.indexOf("Assembler");
   const rows = [...found.table.querySelectorAll("tbody tr")];
   const counts = {};
   let read = 0;
   for (const row of rows) {
     const cell = row.children[productCol];
-    const product = cell ? cell.textContent.replace(/\s+/g, " ").trim() : "";
-    if (!product) continue;
-    counts[product] = (counts[product] || 0) + 1;
+    if (!cell || !row.children[assemblerCol]?.textContent.trim()) continue;
+    const product = cell.textContent.replace(/\s+/g, " ").trim();
     read++;
+    if (IDLE_PRODUCT.test(product)) continue;
+    counts[product] = (counts[product] || 0) + 1;
   }
   return { counts, read, rowCount: rows.length };
 }
