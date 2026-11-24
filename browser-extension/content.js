@@ -440,6 +440,13 @@ function scrapeAssemblerCards() {
 let lastAssemblerBoostSnapshot = null;
 
 function assemblerBoost() {
+  // The Molecular Assembler Office (the Facility's replacement) puts the
+  // boost in a header chip of its own ("chip eff") - read as "-30%".
+  const chip = document.querySelector("[data-panel-open] .hdr .chip.eff");
+  if (chip) {
+    const pct = chip.textContent.match(/(\d+(?:\.\d+)?)\s*%/);
+    if (pct) return Number(pct[1]) / 100;
+  }
   const label = findLeafText("span, div", "Assembler Efficiency");
   if (!label) return 0;
   const m = label.parentElement.textContent.match(/-\s*(\d+(?:\.\d+)?)\s*%\s*materials/i);
@@ -550,6 +557,55 @@ function checkExchangePlans() {
   browser.runtime
     .sendMessage({ type: "fsc-exchange-plans-scrape", items })
     .then(() => { lastExchangePlansSnapshot = snapshot; })
+    .catch(() => {});
+}
+
+// Molecular Assembler Office (Promenade > Assembly), which replaced the
+// Assembly Facility's Configure Production list: bays on the left, the
+// product library on the right - every plan in the game, each with this
+// player's own rate ("Hull Frames · 8 an hour · R&D 3", R&D boosts
+// included) and, when it can't be made, a locked row tagged "research" or
+// "Captain Lv 55". Recipes still come from the Galactic Exchange; this only
+// supplies the rates. The header also carries a Global Research boost chip
+// while one is on (see assemblerBoost()).
+const ASSEMBLER_OFFICE_TITLE = /Molecular Assembler Office$/;
+let lastAssemblerOfficeSnapshot = null;
+
+function assemblerOffice() {
+  for (const ttl of document.querySelectorAll("[data-panel-open] .ttl")) {
+    if (ASSEMBLER_OFFICE_TITLE.test(ttl.textContent.trim())) return ttl.closest("[data-panel-open]");
+  }
+  return null;
+}
+
+// [{name, ratePerHour, locked}] from the product library's rows.
+function scrapeAssemblerOffice(panel) {
+  const items = [];
+  for (const row of panel.querySelectorAll("button.prod")) {
+    const name = row.querySelector("b")?.textContent.trim();
+    const rate = (row.querySelector(".k")?.textContent || "").trim().match(/^([\d,.]+)\s*an hour\b/i);
+    if (!name || !rate) continue;
+    items.push({ name, ratePerHour: parseFloat(rate[1].replace(/,/g, "")), locked: row.classList.contains("locked") });
+  }
+  return items;
+}
+
+function checkAssemblerOffice() {
+  const panel = assemblerOffice();
+  if (!panel) return;
+  checkAssemblerBoost();
+  const items = scrapeAssemblerOffice(panel);
+  // A search or filter matching nothing empties the library too.
+  const filtered = !!panel.querySelector('input[type="search"]')?.value;
+  reportScreenRead("the Molecular Assembler Office's products", !filtered && !!panel.querySelector(".lib"), items.length > 0);
+  if (items.length === 0) return;
+  const snapshot = JSON.stringify(items);
+  if (snapshot === lastAssemblerOfficeSnapshot) return;
+  // See checkCorpStore()'s comment for why this is only marked sent once
+  // background.js confirms it.
+  browser.runtime
+    .sendMessage({ type: "fsc-assembler-rates-scrape", items })
+    .then(() => { lastAssemblerOfficeSnapshot = snapshot; })
     .catch(() => {});
 }
 
@@ -1445,6 +1501,7 @@ const pollIntervalIds = [
   setInterval(checkCorpStore, CORP_POLL_MS),
   setInterval(checkAssemblerPlans, ASSEMBLER_POLL_MS),
   setInterval(checkExchangePlans, ASSEMBLER_POLL_MS),
+  setInterval(checkAssemblerOffice, ASSEMBLER_POLL_MS),
   setInterval(checkResearchPlans, ASSEMBLER_POLL_MS),
   setInterval(checkBlueprintStore, ASSEMBLER_POLL_MS),
   setInterval(checkSkills, ASSEMBLER_POLL_MS),

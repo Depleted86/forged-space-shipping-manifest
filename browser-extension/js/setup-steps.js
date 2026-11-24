@@ -92,7 +92,7 @@ export function buildSetupSteps(s) {
       },
       {
         title: "Load your assembly rates",
-        where: "In the game: Assembly Facility, then Configure Production. The Exchange only shows base rates; this reads your R&D-boosted ones.",
+        where: "In the game: dock, then Promenade → Assembly (the Molecular Assembler Office). The Exchange only shows base rates; its product list has your R&D-boosted ones.",
         done: ownRates > 0,
         detail: ownRates ? `${count(ownRates, "plan")} at your own rate` : null,
       },

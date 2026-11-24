@@ -31,7 +31,7 @@ export function initAssemblyTab(app, container) {
   function refreshEmptyStateHint() {
     emptyStateHint.textContent =
       Object.keys(app.assemblyPlans).length === 0
-        ? "No Assembly Plans yet - in-game, dock at a station with an Assembly service and open Assembly Facility (Configure Production). This tab fills in automatically from the plans listed there, from the Galactic Exchange's Assembler Plans list (every plan's recipe), and from the R&D Office's Research plans tab."
+        ? "No Assembly Plans yet - in-game, dock at a station with an Assembly service and open Promenade → Assembly (the Molecular Assembler Office). This tab fills in automatically from the products listed there (your own rates), from the Galactic Exchange's Assembler Plans list (every plan's recipe), and from the R&D Office's Research plans tab."
         : "";
     emptyStateHint.style.display = emptyStateHint.textContent ? "" : "none";
   }
@@ -60,7 +60,7 @@ export function initAssemblyTab(app, container) {
       lines.push(`R&D: researched to Level ${r.level}${r.progress ? ` (${r.progress} toward next level${r.active ? ", in progress" : ""})` : ""}.`);
     }
     if (plan && !plan.hasRecipe()) {
-      lines.push("Recipe not known yet - it imports automatically from the Galactic Exchange's Assembler Plans list, or once the plan shows up in the in-game Assembly Facility (Configure Production).");
+      lines.push("Recipe not known yet - it imports automatically from the Galactic Exchange's Assembler Plans list, or open Galactic Exchange → Assembler Plans in the game.");
     }
     researchInfo.textContent = lines.join(" ");
     researchInfo.className = `status-text ${r && r.level === 0 ? "status-warn" : ""}`;
@@ -83,7 +83,7 @@ export function initAssemblyTab(app, container) {
   function refreshDetail() {
     const plan = viewed();
     nameHeading.textContent = viewingOutput || "Pick an Assembly Plan from the list";
-    rateInfo.textContent = plan && plan.hasRecipe() ? `Rate: ${plan.ratePerHour} units/hour (one run per hour).${plan.rateIsBase ? " Base rate from the Galactic Exchange - open this plan's Assembly Facility (Configure Production) to read your R&D-boosted rate." : ""}` : "";
+    rateInfo.textContent = plan && plan.hasRecipe() ? `Rate: ${plan.ratePerHour} units/hour (one run per hour).${plan.rateIsBase ? " Base rate from the Galactic Exchange - open Promenade → Assembly (the Molecular Assembler Office) to read your R&D-boosted rate." : ""}` : "";
     capLevelInfo.textContent = plan?.captainLevel != null ? `Captain Level required: ${plan.captainLevel}` : "";
     clear(reqTbody);
     const requirements = plan?.requirements || {};

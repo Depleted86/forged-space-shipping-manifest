@@ -2,7 +2,21 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
-## 4.4.1 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-22)
+## 4.4.2 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-24)
+
+### Release notes (public)
+
+- **Works with the game's new Molecular Assembler Office** (Promenade → Assembly), which replaced the Assembly Facility's Configure Production list. Open it and your own R&D-boosted rate is read for every product at once from its product list; the Global Research boost is still picked up from its header while one is on. Recipes still come from Galactic Exchange → Assembler Plans.
+
+### Notes for reviewers (private)
+
+Update to 4.4.1. No permission changes; still no network requests.
+
+**New page-read surface, read only while that screen is open:**
+
+- **Molecular Assembler Office** (`content.js`, `assemblerOffice()` / `scrapeAssemblerOffice()`), the game's replacement for the Assembly Facility: found by its "Molecular Assembler Office" title inside the open panel. Reads each product-library row's name, "N an hour" rate and whether it's marked locked (`classList`), and the header's boost chip if present. Saved through a new `fsc-assembler-rates-scrape` message to `background.js` (`handleAssemblerRatesScrape()`), which only updates plan rates. Same read-only `querySelectorAll` / `textContent` pattern - no clicks or page changes.
+
+## 4.4.1 (live on Firefox and Chrome 2026-11-23; never submitted to Edge - Edge goes from 4.4 straight to 4.4.2)
 
 ### Release notes (public)
 

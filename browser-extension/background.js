@@ -435,6 +435,34 @@ async function handleExchangePlansScrape(items) {
   await recalculateManifestCorpSelection();
 }
 
+// items: [{name, ratePerHour, locked}] from the Molecular Assembler Office's
+// product library by content.js - this player's own rate for every plan,
+// R&D boosts included. Only the rate is taken (recipes come from the
+// Galactic Exchange); a plan not seen yet is added without a recipe. A
+// locked row (not researched, or Captain level too low) shows a rate the
+// player can't run yet, so it doesn't clear a plan's "base rate" mark.
+async function handleAssemblerRatesScrape(items) {
+  const assemblyPlans = await storage.loadAssemblyPlans();
+  let changed = false;
+  for (const item of items || []) {
+    if (!item || !item.name || !(item.ratePerHour > 0)) continue;
+    const known = assemblyPlans[item.name];
+    const plan = known || new AssemblyPlan(item.name, item.ratePerHour);
+    const rateIsBase = item.locked ? (known ? plan.rateIsBase : true) : false;
+    if (known && plan.ratePerHour === item.ratePerHour && plan.rateIsBase === rateIsBase) continue;
+    plan.ratePerHour = item.ratePerHour;
+    plan.rateIsBase = rateIsBase;
+    assemblyPlans[item.name] = plan;
+    changed = true;
+  }
+  if (!changed) return;
+  await storage.saveAssemblyPlans(assemblyPlans);
+  await recalculateActiveBuildToMineData();
+  await recalculateActiveBuildCorpData();
+  await recalculateManifestSelection();
+  await recalculateManifestCorpSelection();
+}
+
 // plans: [{name, level, skillRequired, progress, active}] scraped from the
 // R&D Office's Research plans tab by content.js - every research
 // plan in the game, level 0 meaning not researched yet. Plans not already
@@ -917,6 +945,7 @@ browser.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.type === "fsc-storage-scrape") handled = handleStorageScrape(msg.items, msg.complete === true);
   else if (msg.type === "fsc-corp-store-scrape") handled = handleCorpStoreScrape(msg.items);
   else if (msg.type === "fsc-assembler-scrape") handled = handleAssemblerScrape(msg.items);
+  else if (msg.type === "fsc-assembler-rates-scrape") handled = handleAssemblerRatesScrape(msg.items);
   else if (msg.type === "fsc-exchange-plans-scrape") handled = handleExchangePlansScrape(msg.items);
   else if (msg.type === "fsc-research-scrape") handled = handleResearchScrape(msg.plans);
   else if (msg.type === "fsc-blueprint-store-scrape") handled = handleBlueprintStoreScrape(msg.list, msg.detail, msg.storeName, msg.storeCategory, msg.storeType);

@@ -71,7 +71,7 @@ and settings. Nothing is ever sent off the device.
 The only host is https://forgedspace.com/*, the game itself. The content
 script reads the game screens the player opens there (Commercial Storage,
 Corp Store, blueprint stores, the Galactic Exchange's Assembler Plans,
-Assembly Facility, R&D Office, Refining Center, the Information Center's
+the Molecular Assembler Office, R&D Office, Refining Center, the Information Center's
 Harvesters, Assemblers and Refining tabs, Skills, the Systems Lexicon and
 the HUD) using textContent only, to keep the local plan in sync, and draws
 the extension's own Manifest overlay. It
