@@ -789,7 +789,124 @@ function storeFiltersActive(panel) {
   return [...panel.querySelectorAll('input[type="text"], input[type="search"], input:not([type])')].some((input) => input.value.trim() !== "");
 }
 
+// The redesigned Blueprint Store (24 Nov 2026 patch, the game's ".fbs"
+// window): no <h3>s - the title is the header's .ttl ("Wolf's Blueprint
+// Store", under a small "Wolf Industries Orbital · Kelsey" line), and each
+// blueprint is a button.row whose meta line carries its class badge (.ct),
+// an "Owned × N" chip (.own), its drawer ("Cargo Expanders" - the store
+// type, now on every card), "⏱ 15m" and "2 uses" (the build limit); the
+// price cell is "<s>30,000</s>25,200 CR<small>−16%</small>".
+function newBlueprintStorePanel() {
+  for (const ttl of document.querySelectorAll(".fbs[data-panel-open] .hdr .ttl")) {
+    const own = [...ttl.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join("").trim();
+    if (/Blueprint Store$/i.test(own) || isBlueprintStoreTitle(own)) {
+      // Each station prefixes its owner ("Wolf's ..."); the extension groups
+      // by store kind, so that's dropped and the old store name kept.
+      const title = own.replace(/^.*?['’]s\s+(?=\S*\s*Blueprint Store$)/i, "");
+      return { panel: ttl.closest("[data-panel-open]"), title, category: title === "Blueprint Store" ? "Manufacturing" : null };
+    }
+  }
+  return null;
+}
+
+function scrapeNewBlueprintStore(found) {
+  const panel = found.panel;
+  const list = [];
+  for (const row of panel.querySelectorAll("button.row")) {
+    const name = row.querySelector("b")?.textContent.replace(/\s+/g, " ").trim();
+    const pr = row.querySelector(".pr");
+    if (!name || !pr) continue;
+    const meta = [...row.querySelectorAll(".meta > span")];
+    const badge = row.querySelector(".meta .ct");
+    // "Used in" badges (Asteroids, O.R.S.A, Outpost...) aren't ship classes.
+    // The old store called these "Universal" or "Structure"; background.js
+    // keeps whichever was saved (classFromUse), new ones default to Universal.
+    const classFromUse = !!badge && badge.classList.contains("ct-used");
+    const shipClass = badge ? (classFromUse ? "Universal" : badge.textContent.trim()) : null;
+    const owned = (row.querySelector(".meta .own")?.textContent || "").match(/Owned\s*[×x]\s*(\d+)/i);
+    const uses = meta.map((s) => s.textContent.trim().match(/^(\d+)\s+uses?$/i)).find(Boolean);
+    const type = meta.find((s) => !s.classList.contains("ct") && !s.classList.contains("own") && !/^⏱|^\d+\s+uses?$/i.test(s.textContent.trim()));
+    const base = parseInt((pr.querySelector("s")?.textContent || "").replace(/[^\d]/g, ""), 10);
+    const charged = [...pr.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join("").trim();
+    const price = parseCredits(charged);
+    const discount = (pr.querySelector("small")?.textContent || "").match(/[−-]\s*(\d+)%/);
+    list.push({
+      name,
+      owned: !!owned,
+      copies: owned ? parseInt(owned[1], 10) : 0,
+      shipClass,
+      classFromUse,
+      buildLimit: uses ? parseInt(uses[1], 10) : null,
+      engReq: null,
+      price,
+      basePrice: Number.isNaN(base) ? price : base,
+      discountPct: discount ? parseInt(discount[1], 10) : 0,
+      storeType: type ? type.textContent.trim() : null,
+    });
+  }
+  // The picked blueprint: its drawing sheet (.sheet4) in the right column,
+  // and the bill of materials hinged outside the window (aside.bomsheet) -
+  // one .mat card per material, "Need 2,409" being the amount for one build
+  // (the cards' totals add up to the sheet's "Build cost at today's prices").
+  const sheet = panel.querySelector(".sheet4");
+  const bom = panel.querySelector(".bomsheet");
+  const materialsShown = !!bom;
+  let detail = null;
+  const name = (sheet?.querySelector("h3") || bom?.querySelector(".bh b"))?.textContent.replace(/\s+/g, " ").trim();
+  if (name && bom) {
+    const requirements = {};
+    for (const mat of bom.querySelectorAll(".mat")) {
+      const itemName = mat.querySelector(".nm")?.textContent.trim();
+      const need = mat.querySelector(".need");
+      const qty = need ? parseFloat([...need.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join("").replace(/[^\d.]/g, "")) : NaN;
+      if (itemName && !Number.isNaN(qty)) requirements[itemName] = qty;
+    }
+    // "Bill of materials · 5 materials": a card that didn't read leaves the
+    // recipe short, so it isn't saved (and the store shows as unreadable).
+    const expected = parseInt(((bom.querySelector(".bh small")?.textContent || "").match(/(\d+)\s+materials?/i) || [])[1], 10);
+    const complete = Number.isNaN(expected) || Object.keys(requirements).length === expected;
+    // "Build cost at today's prices" / "Guide value (fixed)", each with its <b>.
+    const totalAfter = (label) => {
+      const span = [...bom.querySelectorAll(".tot4 > span")].find((s) => label.test(s.textContent.trim()));
+      return span ? parseCredits(span.nextElementSibling?.textContent || "") : null;
+    };
+    // The sheet's labelled figures: "Skill needed Engineering 4" (to fit
+    // it), the title block's "Uses a copy 2", and the "Manufacturing 1 / to
+    // build · you 19" fact.
+    const skill = [...(sheet?.querySelectorAll(".skill4 span") || [])].map((s) => s.textContent.match(/Engineering\s+(\d+)/i)).find(Boolean);
+    const uses = [...(sheet?.querySelectorAll(".tblock > div") || [])].map((d) => d.textContent.trim().match(/^Uses a copy\s*(\d+)/i)).find(Boolean);
+    const mfgFact = [...panel.querySelectorAll(".facts4 .fact")].find((f) => /^Manufacturing$/i.test(f.querySelector("small")?.textContent.trim() || "") && /to build/i.test(f.querySelector("i")?.textContent || ""));
+    const mfg = parseInt(mfgFact?.querySelector("b")?.textContent.replace(/[^\d]/g, "") || "", 10);
+    if (complete) {
+      detail = {
+        name,
+        requirements,
+        buildCost: totalAfter(/^Build cost/i),
+        guideValue: totalAfter(/^Guide value/i),
+        mfgSkill: Number.isNaN(mfg) ? null : mfg,
+        buildLimit: uses ? parseInt(uses[1], 10) : null,
+        levelReq: null,
+        engReq: skill ? parseInt(skill[1], 10) : null,
+        shipValue: null,
+      };
+    }
+  }
+  // As in the old store: the open blueprint only counts while its row is in
+  // the list showing (a filter can hide it with the sheet still open).
+  const detailStale = !!detail && !list.some((card) => card.name === detail.name);
+  if (detailStale) detail = null;
+  const filtered = !!panel.querySelector('input[type="search"]')?.value.trim()
+    || panel.querySelector(".drw[aria-pressed='true']")?.getAttribute("aria-label") !== "All categories"
+    || (panel.querySelector(".seg.fitsec button[aria-pressed='true']")?.textContent.trim() || "All") !== "All";
+  if (list.length === 0 && filtered) {
+    return { list, detail: null, storeName: found.title, storeCategory: found.category, storeType: null, materialsShown, nothingListed: true };
+  }
+  return list.length || detail ? { list, detail, storeName: found.title, storeCategory: found.category, storeType: null, materialsShown, detailStale } : null;
+}
+
 function scrapeBlueprintStore() {
+  const redesigned = newBlueprintStorePanel();
+  if (redesigned) return scrapeNewBlueprintStore(redesigned);
   const found = blueprintStorePanel();
   if (!found) return null;
   const panel = found.panel;
@@ -893,7 +1010,7 @@ function blueprintStoreReadOk(scraped) {
 
 function checkBlueprintStore() {
   const scraped = scrapeBlueprintStore();
-  reportScreenRead("this blueprint store", !!scraped || !!blueprintStorePanel(), blueprintStoreReadOk(scraped));
+  reportScreenRead("this blueprint store", !!scraped || !!blueprintStorePanel() || !!newBlueprintStorePanel(), blueprintStoreReadOk(scraped));
   if (!scraped) {
     lastRecipeNotice = null;
     return;

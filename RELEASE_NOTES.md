@@ -2,6 +2,21 @@
 
 Copy/paste source for each version's AMO submission fields - "Release Notes" (public, shown in the version history) and "Notes for Reviewers" (private, only visible to Mozilla's review team). Not part of the shipped extension - keep out of the packaged zip, same as `chrome-store-listing.md`. New versions get their own section below, newest first.
 
+## 4.4.3 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-24)
+
+### Release notes (public)
+
+- **Works with the game's redesigned Blueprint Store.** Click a blueprint and its materials are saved from the new bill of materials beside the window, along with its build cost, guide value, Manufacturing and Engineering needed and uses per copy, as before. The list reads every blueprint's ownership, class, uses and price.
+- **Blueprints are filed by type in one visit.** The new store shows each blueprint's drawer (Weapons, Reactors, Cargo Expanders...), so blueprint lists are grouped by type without filtering the store to each one first.
+
+### Notes for reviewers (private)
+
+Update to 4.4.2. No permission changes; still no network requests.
+
+**Changed page read:**
+
+- **Blueprint Store** (`content.js`, `newBlueprintStorePanel()` / `scrapeNewBlueprintStore()`), rewritten for the game's redesigned store: found by the "... Blueprint Store" title in the open panel's header. Reads each list row's name, class badge, "Owned × N", drawer, "N uses" and price (`textContent` / `classList`), and for the picked blueprint its drawing sheet's labelled figures and the bill of materials' material names, amounts and totals. Same `fsc-blueprint-store-scrape` message as before (each card now also carries its type). Same read-only `querySelectorAll` / `textContent` pattern - no clicks or page changes. The old store's reader stays for stores not yet redesigned. `background.js` stores each card's type and keeps a blueprint's saved class when the new store shows a "used in" label instead of a ship class.
+
 ## 4.4.2 (submitted to AMO, Edge Add-ons and Chrome Web Store 2026-11-24; live on all three 2026-11-24)
 
 ### Release notes (public)

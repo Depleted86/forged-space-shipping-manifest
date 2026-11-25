@@ -524,7 +524,9 @@ async function handleBlueprintStoreScrape(list, detail, storeName, storeCategory
       ...(blueprint.store || {}),
       owned: !!item.owned,
       copies: item.copies || 0,
-      shipClass: item.shipClass || null,
+      // A "used in" badge from the redesigned store isn't a class: keep the
+      // one the old store gave (Universal or Structure) when there is one.
+      shipClass: (item.classFromUse && blueprint.store?.shipClass) || item.shipClass || null,
       // Starship cards don't show a build limit; keep the detail panel's.
       buildLimit: item.buildLimit ?? blueprint.store?.buildLimit ?? null,
       price: item.price ?? null,
@@ -533,7 +535,8 @@ async function handleBlueprintStoreScrape(list, detail, storeName, storeCategory
       engReq: item.engReq ?? blueprint.store?.engReq ?? null,
       storeName: storeName || blueprint.store?.storeName || null,
       storeCategory: storeCategory || blueprint.store?.storeCategory || null,
-      storeType: storeType || blueprint.store?.storeType || null,
+      // The redesigned store shows each card's type (its drawer) on the card.
+      storeType: item.storeType || storeType || blueprint.store?.storeType || null,
     };
     blueprints[key] = blueprint;
   }
